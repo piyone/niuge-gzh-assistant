@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <header class="hero">
+    <div class="logo">牛</div>
+    <div>
+      <h1>牛哥公众号助手</h1>
+      <p>公众号一站式创作助手</p>
+    </div>
+  </header>
+
+  <section class="row">
+    <label>当前主题</label>
+    <select id="theme"></select>
+  </section>
+
+  <section class="row between">
+    <label>显示悬浮球</label>
+    <input type="checkbox" id="fab">
+  </section>
+
+  <div class="links">
+    <button id="open-mp">打开公众号后台</button>
+    <button id="open-options">排版规则与词库设置</button>
+  </div>
+
+  <p class="tip">在「图文消息 → 新建图文」页面,点击右侧<span class="mark">牛</span>悬浮球开始排版。支持 Markdown 导入、一键规范、违禁词检查与手机预览。</p>
+
+  <script src="popup.js"></script>
+</body>
+</html>

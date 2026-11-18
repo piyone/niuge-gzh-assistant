@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>牛哥 MoPai · 测试台</title>
+<style>
+  body { font-family: "PingFang SC","Microsoft YaHei",sans-serif; margin: 0; display: flex; height: 100vh; }
+  #fake-mp { flex: 1; padding: 24px; background: #eceef1; overflow-y: auto; }
+  #fake-mp h3 { margin: 0 0 12px; color: #333; }
+  #fake-editor {
+    background: #fff; min-height: 380px; border-radius: 6px; padding: 24px;
+    outline: none; line-height: 1.9; font-size: 15px;
+    box-shadow: 0 2px 8px rgba(0,0,0,.08);
+  }
+  .weui-bar { background: #353535; color: #fff; padding: 10px 24px; font-size: 14px; }
+  #log { width: 420px; border-left: 1px solid #ddd; padding: 16px; overflow-y: auto; background: #fff; }
+  #log h4 { margin: 8px 0; }
+  #log pre { background: #f6f8fa; padding: 10px; border-radius: 6px; font-size: 11px; overflow-x: auto; white-space: pre-wrap; }
+  .case { border: 1px solid #eee; border-radius: 8px; padding: 12px; margin-bottom: 14px; }
+  .case h5 { margin: 0 0 8px; font-size: 13px; color: #555; }
+</style>
+</head>
+<body>
+  <div id="fake-mp">
+    <div class="weui-bar">模拟 · 微信公众平台 / 图文编辑页</div>
+    <h3>标题输入框(模拟)</h3>
+    <div id="title" contenteditable="true">牛哥 v1.3 测试文章标题</div>
+    <h3>摘要输入框(模拟发布设置侧栏)</h3>
+    <textarea id="digest" placeholder="摘要:选填,会在会话卡片和转发场景展示"></textarea>
+    <h3>正文编辑器(模拟)</h3>
+    <div id="fake-editor" contenteditable="true"><p>这是一段混乱的文案,SEO和ROI之间没空格,标点也不规范:你好,世界!注意看。</p><p>省略号测试:等待。。。<span>然后就不见了...</span></p><p>这里有个<a href="https://example.com/article">外部链接</a>、一个<a href="https://mp.weixin.qq.com/s/abc">公众号链接</a>和一个<a>裸链接没有href</a>。</p><p>还有用      空格对齐　和全角空格的段落。</p><p>最后的极限词测试:全网最低价,第一名,100%纯天然。</p></div>
+    <h3 style="margin-top:20px">引擎单元用例</h3>
+    <div id="cases"></div>
+  </div>
+  <div id="log">
+    <h4>运行日志</h4>
+    <div id="log-body"></div>
+  </div>
+
+  <script src="shim.js"></script>
+  <script src="../lib/marked.min.js"></script>
+  <script src="../lib/purify.min.js"></script>
+  <script src="../lib/hljs.min.js"></script>
+  <script src="../lib/turndown.js"></script>
+  <script src="../lib/turndown-gfm.js"></script>
+  <script src="../engine/typography.js"></script>
+  <script src="../engine/words.js"></script>
+  <script src="../engine/themes.js"></script>
+  <script src="../engine/ai.js"></script>
+  <script src="../engine/sync-prepare.js"></script>
+  <script src="../engine/render.js"></script>
+  <script src="../background/platforms.js"></script>
+  <script src="../content/content.js"></script>
+  <script>
+    const logBody = document.getElementById('log-body');
+    function log(title, data) {
+      const d = document.createElement('div');
+      d.className = 'case';
+      d.innerHTML = `<h5>${title}</h5><pre></pre>`;
+      d.querySelector('pre').textContent = typeof data === 'string' ? data : JSON.stringify(data, null, 2);
+      logBody.appendChild(d);
+    }
+
+    window.addEventListener('load', async () => {
+      const T = window.MoPaiTypo, R = window.MoPaiRender, TH = window.MoPaiThemes;
+
+      // 用例 1:盘古之白
+      const div1 = document.createElement('div');
+      div1.innerHTML = '<p>用CSS和JS3秒钟搞定,readme说明文档</p>';
+      const n1 = T.normalizeSpaces(div1);
+      log('① 盘古之白 + 标点修正', { 处理数: n1, 结果: div1.textContent });
+
+      // 用例 2:外链脚注
+      const div2 = document.createElement('div');
+      div2.innerHTML = '<p>参考 <a href="https://example.com/a">文档A</a> 和 <a href="https://mp.weixin.qq.com/s/x">公众号文章</a></p>';
+      const r2 = T.footnotify(div2, { vars: TH.getTheme('elegant').vars });
+      log('② 外链脚注化', { 外链数: r2 && r2.count, 结果HTML: div2.innerHTML.slice(0, 400) });
+
+      // 用例 3:完整 Markdown 渲染
+      const md = `# 标题一\n\n正文有CSS和HTML混排,测试空格。\n\n> 引用一句名言\n\n- 列表甲\n- 列表乙\n\n\`\`\`js\nconst a = 1; // 注释\n\`\`\`\n\n| 表头 | 值 |\n| --- | --- |\n| 甲 | 1 |\n\n[外链](https://example.com)`;
+      const r3 = R.renderMarkdown(md, 'elegant');
+      log('③ Markdown 全管线', r3.report);
+      log('③ 输出HTML(截取)', r3.html.slice(0, 900));
+      window.__renderHtml = r3.html;
+
+      // 用例 4:六套主题全部渲染(语法与内联样式抽查)
+      const themeReport = TH.THEMES.map((t) => {
+        const r = R.renderMarkdown('## 测试\n\n内容test混排。', t.id);
+        const h2 = r.root.querySelector('h2');
+        const p = r.root.querySelector('p');
+        return { 主题: t.name, h2有内联: !!(h2 && h2.getAttribute('style')), p有内联: !!(p && p.getAttribute('style')) };
+      });
+      log('④ 主题系统', themeReport);
+
+      // 用例 5:检查引擎(在模拟编辑器上)
+      const editor = document.getElementById('fake-editor');
+      const checks = window.MoPaiContent.runChecks(editor);
+      log('⑤ 发布前检查', checks.map((c) => `[${c.level}] ${c.title}`));
+
+      // 用例 6:统计
+      log('⑥ 文字统计', T.analyzeText(editor));
+
+      // 挂载面板(悬浮球应出现在左侧模拟页)
+      await window.MoPaiContent.mount();
+      log('⑦ 面板挂载', '悬浮球已创建,点击「牛」可展开完整面板;编辑器检测应命中 #fake-editor');
+
+      // 暴露给控制台/自动化
+      window.__test = { findEditor: window.MoPaiContent.findEditor, injectHtml: window.MoPaiContent.injectHtml, render: R.renderMarkdown };
+      log('✅ 全部用例执行完毕', '见左侧面板与上方结果');
+    });
+  </script>
+</body>
+</html>

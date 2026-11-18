@@ -1,0 +1,650 @@
+/* 牛哥公众号助手 · 悬浮球与面板样式(全部 mopai- 前缀,避免污染宿主页面) */
+
+.mopai-fab {
+  position: fixed;
+  right: 22px;
+  top: 45%;
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #1fd47f, #07c160);
+  box-shadow: 0 6px 20px rgba(7, 193, 96, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  z-index: 2147483600;
+  user-select: none;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+.mopai-fab span {
+  color: #fff;
+  font-size: 22px;
+  font-weight: 700;
+  font-family: "PingFang SC", "Microsoft YaHei", sans-serif;
+  pointer-events: none;
+}
+.mopai-fab:hover { transform: scale(1.08); box-shadow: 0 8px 26px rgba(7, 193, 96, 0.55); }
+.mopai-fab.active { box-shadow: 0 0 0 3px rgba(7, 193, 96, 0.25), 0 6px 20px rgba(7, 193, 96, 0.45); }
+
+.mopai-toast {
+  position: fixed;
+  left: 50%;
+  bottom: 48px;
+  transform: translateX(-50%) translateY(20px);
+  background: rgba(20, 24, 34, 0.92);
+  color: #fff;
+  padding: 10px 18px;
+  border-radius: 8px;
+  font-size: 13px;
+  z-index: 2147483640;
+  opacity: 0;
+  pointer-events: none;
+  transition: all 0.25s ease;
+  max-width: 70vw;
+  font-family: "PingFang SC", "Microsoft YaHei", sans-serif;
+}
+.mopai-toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+.mopai-toast.err { background: rgba(178, 34, 52, 0.95); }
+
+.mopai-panel {
+  position: fixed;
+  right: 86px;
+  top: 12%;
+  width: 460px;
+  height: min(680px, calc(100vh - 90px));
+  background: #ffffff;
+  border-radius: 14px;
+  box-shadow: 0 12px 48px rgba(15, 23, 42, 0.22), 0 0 0 1px rgba(15, 23, 42, 0.06);
+  z-index: 2147483601;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  font-family: "PingFang SC", "Microsoft YaHei", -apple-system, sans-serif;
+  font-size: 13px;
+  color: #1f2937;
+  animation: mopai-in 0.18s ease;
+}
+@keyframes mopai-in {
+  from { opacity: 0; transform: translateX(14px); }
+  to { opacity: 1; transform: none; }
+}
+
+.mopai-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 14px;
+  background: linear-gradient(135deg, #1fd47f, #07c160);
+  color: #fff;
+  cursor: move;
+  flex-shrink: 0;
+}
+.mopai-logo { font-size: 16px; font-weight: 800; letter-spacing: 1px; }
+.mopai-sub { font-size: 12px; opacity: 0.85; flex: 1; line-height: 1.5; }
+/* 分区小标题与下方按钮/内容保持呼吸感 */
+.mopai-pane .mopai-sub { display: block; margin: 16px 0 10px; }
+.mopai-section-title { margin: 18px 0 10px; }
+.mopai-section-title + .mopai-btn { margin-bottom: 12px; }
+.mopai-hint { font-size: 12px; color: #8a94a6; line-height: 1.6; margin-top: 10px; }
+.mopai-head-actions { display: flex; gap: 4px; }
+.mopai-icon-btn {
+  background: rgba(255, 255, 255, 0.16);
+  border: none;
+  color: #fff;
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1;
+}
+.mopai-icon-btn:hover { background: rgba(255, 255, 255, 0.3); }
+
+.mopai-tabs {
+  display: flex;
+  gap: 1px;
+  padding: 6px 8px;
+  border-bottom: 1px solid #eef0f4;
+  background: #fafbfd;
+  flex-shrink: 0;
+}
+.mopai-tab {
+  flex: 1;
+  border: none;
+  background: transparent;
+  padding: 5px 0;
+  font-size: 12px;
+  color: #6b7280;
+  border-radius: 7px;
+  cursor: pointer;
+  font-family: inherit;
+  white-space: nowrap;
+}
+.mopai-tab:hover { background: #e8f6ee; color: #07c160; }
+.mopai-tab.on { background: #07c160; color: #fff; font-weight: 600; }
+
+.mopai-body { flex: 1; overflow-y: auto; padding: 12px 14px; }
+.mopai-pane { display: flex; flex-direction: column; gap: 10px; }
+.mopai-section-title {
+  font-size: 13px;
+  font-weight: 800;
+  color: #111827;
+  padding-left: 9px;
+  border-left: 3px solid #07c160;
+  margin-top: 4px;
+}
+
+.mopai-row { display: flex; gap: 8px; flex-wrap: wrap; }
+.mopai-btn {
+  border: 1px solid #d7dbe3;
+  background: #fff;
+  color: #1f2937;
+  border-radius: 8px;
+  padding: 8px 14px;
+  font-size: 13px;
+  cursor: pointer;
+  font-family: inherit;
+  transition: all 0.15s;
+}
+.mopai-btn:hover { border-color: #07c160; color: #07c160; }
+.mopai-btn.primary {
+  background: linear-gradient(135deg, #1fd47f, #07c160);
+  border: none;
+  color: #fff;
+  font-weight: 600;
+}
+.mopai-btn.primary:hover { opacity: 0.92; color: #fff; }
+.mopai-btn.ghost { border-color: transparent; background: #f3f4f6; color: #4b5563; }
+.mopai-btn.ghost:hover { background: #e8ebf0; }
+
+.mopai-md {
+  width: 100%;
+  min-height: 150px;
+  box-sizing: border-box;
+  border: 1px solid #d7dbe3;
+  border-radius: 10px;
+  padding: 10px 12px;
+  font-size: 13px;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  line-height: 1.6;
+  resize: vertical;
+  outline: none;
+}
+.mopai-md:focus { border-color: #07c160; box-shadow: 0 0 0 3px rgba(7, 193, 96, 0.12); }
+
+.mopai-report {
+  font-size: 12px;
+  color: #6b7280;
+  background: #f8f9fb;
+  border-radius: 8px;
+  padding: 8px 10px;
+  line-height: 1.7;
+  word-break: break-all;
+}
+
+.mopai-mini-preview {
+  border: 1px dashed #d7dbe3;
+  border-radius: 10px;
+  padding: 14px;
+  max-height: 320px;
+  overflow-y: auto;
+  background: #fff;
+}
+.mopai-mini-preview:empty { display: none; }
+
+/* 排版卡片 */
+.mopai-cards { display: flex; flex-direction: column; gap: 8px; }
+.mopai-card-btn {
+  text-align: left;
+  border: 1px solid #e5e8ef;
+  background: #fff;
+  border-radius: 10px;
+  padding: 11px 14px;
+  font-size: 14px;
+  cursor: pointer;
+  font-family: inherit;
+  transition: all 0.15s;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.mopai-card-btn span { font-size: 12px; color: #8a93a3; }
+.mopai-card-btn:hover { border-color: #07c160; background: #f0faf5; transform: translateY(-1px); }
+
+/* 主题网格 */
+.mopai-theme-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+/* 自定义主题编辑器 */
+.mopai-custom-box { margin-top: 10px; border: 1px dashed #d5dbe5; border-radius: 10px; padding: 10px; background: #fafbfd; }
+.mopai-custom-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 10px; }
+.mopai-color-item { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 11px; color: #556; }
+.mopai-color-item input[type="color"] { width: 34px; height: 24px; border: 1px solid #d8dee9; border-radius: 6px; padding: 0; background: #fff; cursor: pointer; }
+.mopai-select { flex: 1; border: 1px solid #d8dee9; border-radius: 8px; padding: 6px 8px; font-size: 12px; color: #333; background: #fff; font-family: inherit; }
+.mopai-theme-card {
+  border: 1.5px solid #e5e8ef;
+  background: #fff;
+  border-radius: 10px;
+  padding: 10px 6px;
+  cursor: pointer;
+  font-family: inherit;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  transition: all 0.15s;
+}
+.mopai-theme-card:hover { border-color: #9db8f5; }
+.mopai-theme-card.on { border-color: #07c160; background: #eaf7f0; }
+.mopai-theme-card b { font-size: 13px; color: #1f2937; }
+.mopai-theme-card small { font-size: 10px; color: #98a1b2; text-align: center; line-height: 1.4; }
+.mopai-theme-dots { display: flex; gap: 4px; }
+.mopai-theme-dots i { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+
+.mopai-slider-row { display: flex; align-items: center; gap: 10px; }
+.mopai-slider-row label { font-size: 12px; color: #4b5563; min-width: 74px; }
+.mopai-slider-row input[type="range"] { flex: 1; accent-color: #07c160; }
+
+/* 检查结果 */
+.mopai-check-list { display: flex; flex-direction: column; gap: 8px; }
+.mopai-check-item {
+  border: 1px solid #e5e8ef;
+  border-radius: 10px;
+  padding: 9px 12px;
+  background: #fff;
+}
+.mopai-check-item.warn { border-color: #f5c26b; background: #fffaf1; }
+.mopai-check-item.info { border-color: #a9c4f7; background: #f0faf5; }
+.mopai-check-title { font-size: 13px; font-weight: 600; }
+.mopai-check-detail { font-size: 12px; color: #6b7280; margin-top: 4px; line-height: 1.7; word-break: break-all; }
+
+/* 统计 */
+.mopai-stat-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.mopai-stat {
+  background: #f0faf5;
+  border-radius: 10px;
+  padding: 12px 6px;
+  text-align: center;
+}
+.mopai-stat b { display: block; font-size: 20px; color: #07c160; }
+.mopai-stat span { font-size: 11px; color: #8a93a3; }
+
+/* 手机预览 */
+.mopai-phone-wrap { display: flex; justify-content: center; }
+.mopai-phone {
+  width: 375px;
+  height: 480px;
+  border: 10px solid #1c2230;
+  border-radius: 30px;
+  overflow: hidden;
+  background: #fff;
+  box-shadow: 0 10px 30px rgba(15, 23, 42, 0.18);
+}
+.mopai-phone-wrap.tall .mopai-phone { height: 520px; }
+.mopai-phone iframe { width: 100%; height: 100%; border: none; display: block; }
+
+.mopai-empty {
+  text-align: center;
+  color: #8a93a3;
+  padding: 40px 12px;
+  line-height: 2;
+  font-size: 13px;
+}
+
+/* 表单 */
+.mopai-label { font-size: 12px; color: #4b5563; font-weight: 600; }
+.mopai-input {
+  border: 1px solid #d7dbe3;
+  border-radius: 8px;
+  padding: 8px 12px;
+  font-size: 13px;
+  font-family: inherit;
+  outline: none;
+  width: 100%;
+  box-sizing: border-box;
+}
+.mopai-input:focus { border-color: #07c160; box-shadow: 0 0 0 3px rgba(7, 193, 96, 0.12); }
+
+/* 进度条 */
+.mopai-progress { display: flex; align-items: center; gap: 10px; }
+.mopai-progress-bar {
+  flex: 1;
+  height: 6px;
+  background: #eef0f4;
+  border-radius: 3px;
+  overflow: hidden;
+}
+.mopai-progress-bar i {
+  display: block;
+  height: 100%;
+  width: 0;
+  background: linear-gradient(90deg, #1fd47f, #07c160);
+  border-radius: 3px;
+  transition: width 0.3s ease;
+}
+.mopai-progress span { font-size: 12px; color: #6b7280; white-space: nowrap; }
+
+/* AI 校对结果 */
+.mopai-ai-list { display: flex; flex-direction: column; gap: 8px; }
+.mopai-ai-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  border: 1px solid #e5e8ef;
+  border-radius: 10px;
+  padding: 9px 11px;
+  background: #fff;
+}
+.mopai-ai-item.err { border-color: #f0a3b1; background: #fef2f4; color: #9f2b45; line-height: 1.7; }
+.mopai-ai-badge {
+  flex-shrink: 0;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 2px 7px;
+  border-radius: 5px;
+  color: #fff;
+}
+.mopai-ai-badge.typo { background: #d64550; }
+.mopai-ai-badge.fluency { background: #e8890c; }
+.mopai-ai-badge.punct { background: #3478c6; }
+.mopai-ai-body { flex: 1; min-width: 0; }
+.mopai-ai-diff { font-size: 13px; line-height: 1.6; word-break: break-all; }
+.mopai-ai-diff s { color: #b3294a; }
+.mopai-ai-diff b { color: #1a7f55; }
+.mopai-ai-reason { font-size: 11px; color: #8a93a3; margin-top: 3px; }
+.mopai-ai-actions { flex-shrink: 0; }
+.mopai-ai-actions .mopai-btn { padding: 5px 10px; font-size: 12px; }
+.mopai-ai-done { flex-shrink: 0; font-size: 12px; color: #1a7f55; font-weight: 600; padding: 5px 0; }
+
+/* AI 配置状态条 */
+.mopai-ai-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: #fff7e8;
+  border: 1px solid #f5c26b;
+  border-radius: 10px;
+  padding: 11px 13px;
+}
+.mopai-ai-banner-text { flex: 1; font-size: 13px; line-height: 1.7; color: #8a5a12; }
+.mopai-ai-banner-text span { font-size: 12px; color: #a5803c; }
+.mopai-ai-banner .mopai-btn { flex-shrink: 0; }
+.mopai-ai-status {
+  font-size: 12px;
+  color: #5a6478;
+  background: #eaf7f0;
+  border-radius: 8px;
+  padding: 8px 11px;
+  line-height: 1.6;
+}
+.mopai-ai-status b { color: #07c160; }
+
+/* AI 子模式切换 */
+.mopai-ai-modes {
+  display: flex;
+  gap: 2px;
+  background: #f3f4f6;
+  border-radius: 10px;
+  padding: 3px;
+}
+.mopai-ai-mode {
+  flex: 1;
+  border: none;
+  background: transparent;
+  border-radius: 8px;
+  padding: 7px 0;
+  font-size: 13px;
+  color: #6b7280;
+  cursor: pointer;
+  font-family: inherit;
+}
+.mopai-ai-mode.on { background: #fff; color: #07c160; font-weight: 700; box-shadow: 0 1px 4px rgba(15, 23, 42, 0.12); }
+
+/* AI 标题生成 */
+.mopai-ai-gen-status { font-size: 12px; color: #8a93a3; }
+.mopai-title-list { display: flex; flex-direction: column; gap: 8px; }
+.mopai-title-item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  border: 1px solid #e5e8ef;
+  border-radius: 10px;
+  padding: 10px 12px;
+  background: #fff;
+}
+.mopai-title-style {
+  flex-shrink: 0;
+  font-size: 11px;
+  font-weight: 700;
+  color: #07c160;
+  background: #e8f6ee;
+  border-radius: 5px;
+  padding: 3px 8px;
+}
+.mopai-title-body { flex: 1; min-width: 0; }
+.mopai-title-body div { font-size: 14px; font-weight: 600; line-height: 1.5; word-break: break-all; }
+.mopai-title-body small { font-size: 11px; color: #98a1b2; }
+.mopai-title-item .mopai-btn { flex-shrink: 0; padding: 6px 12px; font-size: 12px; }
+
+/* AI 摘要生成 */
+.mopai-summary-card { border: 1px solid #e5e8ef; border-radius: 10px; padding: 12px 14px; background: #fff; }
+.mopai-summary-text { font-size: 13px; line-height: 1.8; color: #374151; text-align: justify; }
+.mopai-summary-meta { margin-top: 8px; font-size: 11px; }
+.mopai-summary-meta .good { color: #1a7f55; font-weight: 700; }
+.mopai-summary-meta .ok { color: #e8890c; font-weight: 600; }
+.mopai-summary-meta .bad { color: #c02950; font-weight: 700; }
+.mopai-summary-card .mopai-row { margin-top: 10px; }
+
+/* AI 写文章 */
+.mopai-field-label { font-size: 12px; color: #4b5563; font-weight: 600; }
+.mopai-chip-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  font-size: 12px;
+  color: #8a93a3;
+}
+.mopai-chip-link {
+  border: 1px solid #e5e8ef;
+  background: #fff;
+  border-radius: 999px;
+  padding: 3px 10px;
+  font-size: 12px;
+  color: #4b5563;
+  cursor: pointer;
+  font-family: inherit;
+}
+.mopai-chip-link:hover { border-color: #07c160; color: #07c160; }
+/* 风格/读者胶囊选项:选中态为品牌绿 */
+.mopai-chip-option { padding: 4px 12px; }
+/* AI 生成加载动画:旋转圈 + 三条跳动圆点 */
+.mopai-ai-loading { display: flex; align-items: center; gap: 8px; padding: 16px 4px; color: #667; font-size: 13px; }
+/* 生成按钮行与结果卡片之间保持呼吸感 */
+#mopai-title-list, #mopai-summary-wrap { margin-top: 14px; }
+.mopai-spinner {
+  width: 14px; height: 14px; flex: none;
+  border: 2px solid rgba(7, 193, 96, .25);
+  border-top-color: #07c160;
+  border-radius: 50%;
+  animation: mopai-spin .8s linear infinite;
+}
+@keyframes mopai-spin { to { transform: rotate(360deg); } }
+.mopai-dots { display: inline-flex; gap: 3px; margin-left: 2px; }
+.mopai-dots i {
+  width: 4px; height: 4px; border-radius: 50%;
+  background: #07c160;
+  animation: mopai-bounce 1.2s infinite ease-in-out;
+}
+.mopai-dots i:nth-child(2) { animation-delay: .15s; }
+.mopai-dots i:nth-child(3) { animation-delay: .3s; }
+@keyframes mopai-bounce {
+  0%, 60%, 100% { transform: translateY(0); opacity: .5; }
+  30% { transform: translateY(-4px); opacity: 1; }
+}
+
+.mopai-chip-option.mopai-chip-on {
+  background: linear-gradient(135deg, #1fd47f, #07c160);
+  border-color: transparent;
+  color: #fff;
+  font-weight: 600;
+  box-shadow: 0 2px 6px rgba(7, 193, 96, .28);
+}
+.mopai-article-form-row { display: flex; flex-direction: column; gap: 10px; }
+.mopai-article-form-row .mopai-field { display: flex; flex-direction: column; gap: 6px; }
+/* 生成初稿按钮行与上方「目标读者」标签组保持呼吸感 */
+.mopai-article-form-row + .mopai-row { margin-top: 16px; }
+.mopai-article-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 12px;
+  color: #5a6478;
+  background: #f0faf5;
+  border: 1px solid #e5e8ef;
+  border-bottom: none;
+  border-radius: 8px 8px 0 0;
+  padding: 7px 11px;
+}
+.mopai-article-head b { color: #07c160; }
+.mopai-article-head-btns { display: flex; gap: 4px; }
+.mopai-article-head-btns .mopai-btn { padding: 3px 8px; font-size: 11px; }
+.mopai-article-preview {
+  border: 1px solid #e5e8ef;
+  border-top: none;
+  border-radius: 0 0 10px 10px;
+  padding: 14px;
+  max-height: 320px;
+  overflow-y: auto;
+  background: #fff;
+}
+.mopai-article-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+.mopai-article-note { font-size: 11px; color: #98a1b2; }
+.mopai-article-empty {
+  text-align: center;
+  padding: 26px 10px;
+  border: 1px dashed #d7dbe3;
+  border-radius: 10px;
+  color: #8a93a3;
+  font-size: 13px;
+  line-height: 2;
+}
+.mopai-article-empty-icon { font-size: 26px; }
+.mopai-article-empty b { color: #07c160; }
+.mopai-article-loading {
+  text-align: center;
+  padding: 30px 10px;
+  border: 1px dashed #d7dbe3;
+  border-radius: 10px;
+  color: #5a6478;
+  font-size: 13px;
+}
+.mopai-article-loading-sub { font-size: 11px; color: #98a1b2; margin-top: 6px; }
+.mopai-loading-dots { display: flex; gap: 5px; justify-content: center; margin-bottom: 10px; }
+.mopai-loading-dots i {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #07c160;
+  opacity: 0.3;
+  animation: mopai-bounce 1.2s infinite;
+}
+.mopai-loading-dots i:nth-child(2) { animation-delay: 0.15s; }
+.mopai-loading-dots i:nth-child(3) { animation-delay: 0.3s; }
+@keyframes mopai-bounce {
+  0%, 80%, 100% { opacity: 0.25; transform: translateY(0); }
+  40% { opacity: 1; transform: translateY(-5px); }
+}
+
+/* 多平台同步 */
+.mopai-sync-group { display: flex; flex-direction: column; gap: 6px; }
+.mopai-sync-group-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 12px;
+  color: #374151;
+}
+.mopai-sync-group-head .mopai-btn { padding: 3px 10px; font-size: 11px; }
+.mopai-chip-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px; }
+.mopai-chip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid #e5e8ef;
+  border-radius: 8px;
+  padding: 7px 9px;
+  cursor: pointer;
+  background: #fff;
+  transition: all 0.15s;
+}
+.mopai-chip:hover { border-color: #9db8f5; }
+.mopai-chip.on { border-color: #07c160; background: #eaf7f0; }
+.mopai-chip input { accent-color: #07c160; margin: 0; }
+.mopai-chip-name { flex: 1; font-size: 12px; font-weight: 600; color: #1f2937; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mopai-chip-fmt { font-size: 9px; color: #07c160; background: #e8f6ee; border-radius: 3px; padding: 1px 4px; font-weight: 700; flex-shrink: 0; }
+.mopai-sync-results { display: flex; flex-direction: column; gap: 6px; }
+.mopai-sync-result {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  border: 1px solid #e5e8ef;
+  border-radius: 8px;
+  padding: 8px 11px;
+  font-size: 12px;
+  line-height: 1.6;
+  background: #fff;
+  word-break: break-all;
+}
+.mopai-sync-result b { flex-shrink: 0; }
+.mopai-sync-result.ok { border-color: #b8dfc8; background: #f2fbf5; }
+.mopai-sync-result.err { border-color: #f0a3b1; background: #fef2f4; color: #9f2b45; }
+.mopai-sync-result span { color: #4b5563; }
+.mopai-sync-result.err span { color: inherit; }
+.mopai-platform-list { display: flex; flex-direction: column; gap: 8px; }
+.mopai-platform-card {
+  border: 1px solid #e5e8ef;
+  border-radius: 10px;
+  padding: 11px 13px;
+  background: #fff;
+}
+.mopai-platform-head { display: flex; align-items: center; gap: 8px; }
+.mopai-platform-head b { font-size: 14px; }
+.mopai-platform-fmt {
+  font-size: 10px;
+  color: #07c160;
+  background: #e8f6ee;
+  border-radius: 4px;
+  padding: 1px 6px;
+  font-weight: 600;
+}
+.mopai-platform-note { font-size: 11px; color: #98a1b2; margin-top: 3px; }
+.mopai-platform-status {
+  font-size: 12px;
+  color: #6b7280;
+  margin: 7px 0;
+  line-height: 1.6;
+  word-break: break-all;
+}
+.mopai-platform-status.ok { color: #1a7f55; font-weight: 600; }
+.mopai-platform-status.err { color: #c02950; }
+.mopai-platform-card .mopai-row { margin-top: 6px; }
+.mopai-platform-card .mopai-btn { padding: 6px 10px; font-size: 12px; }
+
+/* 快照历史 */
+.mopai-snap-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  border: 1px dashed #d7dbe3;
+  border-radius: 10px;
+  padding: 10px;
+}
+.mopai-snap-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12px;
+  color: #4b5563;
+}
+.mopai-snap-item .mopai-btn { padding: 4px 10px; font-size: 11px; flex-shrink: 0; }

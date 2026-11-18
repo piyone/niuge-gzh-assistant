@@ -1,0 +1,73 @@
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  width: 300px;
+  font-family: "PingFang SC", "Microsoft YaHei", -apple-system, sans-serif;
+  font-size: 13px;
+  color: #1f2937;
+  background: #fff;
+}
+.hero {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 16px;
+  background: linear-gradient(135deg, #1fd47f, #07c160);
+  color: #fff;
+}
+.logo {
+  width: 38px; height: 38px;
+  border-radius: 10px;
+  background: rgba(255,255,255,.18);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 20px; font-weight: 800;
+}
+.hero h1 { font-size: 16px; }
+.hero p { font-size: 11px; opacity: .85; }
+
+section.row {
+  display: flex; align-items: center; justify-content: flex-start; gap: 10px;
+  padding: 10px 16px;
+}
+section.row.between { justify-content: space-between; }
+section.row label { color: #4b5563; }
+select {
+  flex: 1;
+  padding: 5px 8px;
+  border: 1px solid #d7dbe3;
+  border-radius: 7px;
+  font-size: 13px;
+  background: #fff;
+}
+input[type="checkbox"] { width: 16px; height: 16px; accent-color: #07c160; }
+
+.links { display: flex; flex-direction: column; gap: 8px; padding: 6px 16px 4px; }
+.links button {
+  padding: 9px 12px;
+  border-radius: 8px;
+  border: 1px solid #d7dbe3;
+  background: #fff;
+  cursor: pointer;
+  font-size: 13px;
+  text-align: left;
+  font-family: inherit;
+}
+.links button:hover { border-color: #07c160; color: #07c160; }
+.tip {
+  margin: 10px 16px 16px;
+  padding: 10px;
+  background: #f0faf5;
+  border-radius: 8px;
+  color: #5a6478;
+  font-size: 12px;
+  line-height: 1.8;
+}
+.mark {
+  display: inline-block;
+  width: 16px; height: 16px;
+  line-height: 16px;
+  text-align: center;
+  border-radius: 4px;
+  background: #07c160;
+  color: #fff;
+  font-size: 11px;
+}

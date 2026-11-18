@@ -1,0 +1,78 @@
+{
+  "manifest_version": 3,
+  "name": "牛哥公众号助手",
+  "version": "1.7.27",
+  "description": "公众号一站式创作助手:Markdown 一键导入、中文排版规范、外链脚注化、违禁词检查、AI 写文章/AI 标题/AI 摘要、AI 校对、一键同步 13 个平台草稿箱、主题美化、手机预览、防丢稿快照。",
+  "permissions": ["storage", "clipboardWrite", "activeTab", "declarativeNetRequest", "cookies"],
+  "host_permissions": [
+    "*://mp.weixin.qq.com/*",
+    "https://platform.aitools.cfd/*",
+    "https://api.deepseek.com/*",
+    "https://open.bigmodel.cn/*",
+    "https://api.moonshot.cn/*",
+    "https://dashscope.aliyuncs.com/*",
+    "https://api.siliconflow.cn/*",
+    "https://openrouter.ai/*",
+    "http://localhost:11434/*",
+    "http://127.0.0.1:11434/*",
+    "https://zhuanlan.zhihu.com/*",
+    "https://www.zhihu.com/*",
+    "https://api.juejin.cn/*",
+    "https://juejin.cn/*",
+    "*://*.bilibili.com/*",
+    "*://bilibili.com/*",
+    "*://baijiahao.baidu.com/*",
+    "*://card.weibo.com/*",
+    "*://mp.sohu.com/*",
+    "*://sohu.com/*",
+    "*://*.sohu.com/*",
+    "*://bizapi.csdn.net/*",
+    "*://editor.csdn.net/*",
+    "*://segmentfault.com/*",
+    "*://*.segmentfault.com/*",
+    "*://i.cnblogs.com/*",
+    "*://upload.cnblogs.com/*",
+    "*://home.cnblogs.com/*",
+    "*://cnblogs.com/*",
+    "*://*.cnblogs.com/*",
+    "*://apiv1.oschina.net/*",
+    "*://www.imooc.com/*",
+    "*://mp.xueqiu.com/*",
+    "*://www.woshipm.com/*",
+    "*://woshipm.com/*"
+  ],
+  "background": {
+    "service_worker": "background/service-worker.js"
+  },
+  "action": {
+    "default_popup": "popup/popup.html",
+    "default_title": "牛哥公众号助手"
+  },
+  "options_page": "options/options.html",
+  "content_scripts": [
+    {
+      "matches": ["*://mp.weixin.qq.com/*"],
+      "js": [
+        "lib/marked.min.js",
+        "lib/purify.min.js",
+        "lib/hljs.min.js",
+        "lib/turndown.js",
+        "lib/turndown-gfm.js",
+        "engine/typography.js",
+        "engine/words.js",
+        "engine/themes.js",
+        "engine/ai.js",
+        "engine/sync-prepare.js",
+        "engine/render.js",
+        "content/content.js"
+      ],
+      "css": ["content/panel.css"],
+      "run_at": "document_idle"
+    }
+  ],
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}

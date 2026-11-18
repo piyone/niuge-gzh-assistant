@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>牛哥公众号助手 · 设置</title>
+<link rel="stylesheet" href="options.css">
+</head>
+<body>
+  <main>
+    <header>
+      <div class="logo">牛</div>
+      <div>
+        <h1>牛哥公众号助手 设置</h1>
+        <p>公众号一站式创作助手 · v1.7.0</p>
+      </div>
+    </header>
+
+    <section>
+      <h2>默认主题</h2>
+      <select id="theme"></select>
+      <p class="hint">在公众号编辑页的「排版」标签(② 主题美化区)里也可以随时切换并预览。</p>
+    </section>
+
+    <section>
+      <h2>排版规则</h2>
+      <label class="switch"><input type="checkbox" id="rule-pad"><span>中英文之间自动加空格(盘古之白)</span></label>
+      <label class="switch"><input type="checkbox" id="rule-punct"><span>半角标点转全角(仅中文语境,不碰代码)</span></label>
+      <label class="switch"><input type="checkbox" id="rule-blank"><span>压缩连续空行</span></label>
+      <label class="switch"><input type="checkbox" id="rule-ellipsis"><span>省略号标准化(。。。 / ... → ……,代码与网址不受影响)</span></label>
+      <label class="switch"><input type="checkbox" id="rule-collapse"><span>连续标点收敛(!!! → !,默认关闭,保留感叹号风格)</span></label>
+      <label class="switch"><input type="checkbox" id="rule-footnote"><span>外部链接自动转文末「引用链接」</span></label>
+      <p class="hint">代码块内永远不会被修改。</p>
+    </section>
+
+    <section>
+      <h2>自定义违禁词</h2>
+      <textarea id="words" placeholder="每行一个词,补充到内置的广告法极限词词库之后&#10;例如:&#10;顶级配方&#10;全网最低"></textarea>
+      <p class="hint">内置词库已覆盖常见广告法极限词与高风险承诺用语,这里补充你所在行业的专属词。</p>
+    </section>
+
+    <section>
+      <h2>AI 模型配置</h2>
+      <label class="field"><span>服务商</span>
+        <select id="ai-provider"></select>
+      </label>
+      <label class="field"><span>接口地址</span><input type="text" id="ai-url" placeholder="https://.../v1/chat/completions"></label>
+      <label class="field"><span>API Key</span>
+        <div class="key-wrap">
+          <input type="password" id="ai-key" placeholder="sk-...(部分本地服务可留空)" autocomplete="off">
+          <button type="button" id="ai-key-toggle" title="显示/隐藏">显示</button>
+        </div>
+      </label>
+      <label class="field"><span>模型</span><input type="text" id="ai-model" list="ai-model-list" placeholder="选服务商后可下拉选用">
+        <datalist id="ai-model-list"></datalist>
+      </label>
+      <div class="btns ai-test-row">
+        <button id="ai-test">🔌 测试连接</button>
+        <span id="ai-test-result"></span>
+      </div>
+      <p class="hint">支持所有 OpenAI 兼容接口:选服务商自动填地址与常用模型,Key 按服务商分别记忆;也可手改任意字段。测试连接会真实调用一次接口验证 Key 与模型。⚠️ 思维链模型(如 glm-4.7-flash)会消耗推理 token 导致校对结果被截断,建议用非推理模型。密钥仅存本地浏览器,请勿分享装好密钥的插件目录。</p>
+    </section>
+
+    <section>
+      <h2>配置备份</h2>
+      <div class="btns">
+        <button id="export">导出配置 (JSON)</button>
+        <button id="import">导入配置</button>
+        <input type="file" id="file" accept=".json" hidden>
+      </div>
+    </section>
+
+    <section>
+      <h2>使用说明</h2>
+      <ol class="help">
+        <li>打开 <b>mp.weixin.qq.com</b> → 图文消息 → 新建图文(写文章)。</li>
+        <li>页面右侧出现「牛」字悬浮球,点击展开面板。</li>
+        <li><b>导入</b>:粘贴 Markdown → 预览 → 「注入编辑器」或「复制富文本」手动粘贴。</li>
+        <li><b>排版</b>:三个区块一站式——①一键规范(中英空格/全角标点/省略号/空行/外链脚注)②主题美化(6 套主题+字号行距+手机预览)③防丢稿(快照历史)。每次操作前自动存快照。</li>
+        <li><b>检查</b>:发布前跑一遍违禁词 / 外链 / 图片域名 / 段落节奏检查。</li>
+        <li><b>AI 校对</b>:调用 AI 检查错别字、语句不通顺、标点误用,逐条一键应用。</li>
+        <li><b>同步</b>:一键把文章写入知乎专栏 / 掘金草稿箱(用浏览器已登录的账号;发布到平台仍需手动确认)。</li>
+        <li><b>预览</b>:375px 手机宽度还原读者视角。</li>
+      </ol>
+      <p class="hint">如果「注入编辑器」在个别浏览器版本失效,用「复制富文本」后到编辑器里 Ctrl/Cmd + V,效果完全一致。</p>
+    </section>
+
+    <footer>牛哥公众号助手 · 本地运行,不上传任何内容</footer>
+  </main>
+  <script src="options.js"></script>
+</body>
+</html>
