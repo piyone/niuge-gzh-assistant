@@ -22,12 +22,23 @@
 
 ## 📦 安装(Chrome / Edge / Arc 等 Chromium 浏览器)
 
-1. 打开 `chrome://extensions`(Edge 为 `edge://extensions`)
-2. 右上角开启「开发者模式」
-3. 点「加载已解压的扩展程序」,选择本目录(`mopai-extension`)
-4. 打开 [mp.weixin.qq.com](https://mp.weixin.qq.com/) → 图文消息 → 新建图文,页面右侧出现「牛」字悬浮球即安装成功
+1. 下载本仓库(页面右上角 Code → Download ZIP 解压,或 `git clone`)
+2. 打开 `chrome://extensions`(Edge 为 `edge://extensions`)
+3. 右上角开启「开发者模式」
+4. 点「加载已解压的扩展程序」,选择本仓库的 `niuge-gzh-assistant` 目录
+5. 打开 [mp.weixin.qq.com](https://mp.weixin.qq.com/) → 图文消息 → 新建图文,页面右侧出现「牛」字悬浮球即安装成功
 
-> v1.0 → v1.1 升级:重新加载扩展即可;新增了后台 Service Worker 与若干站点权限,浏览器可能提示权限变更。
+> - 仅支持 Chromium 内核浏览器;Firefox / Safari 不支持(MV3 的 DNR 会话规则用法不同)
+> - **更新版本**:下载新版后覆盖目录,回到扩展管理页点该插件卡片上的「刷新」按钮即可
+> - **卸载**:扩展管理页点「移除」;所有数据(API Key、快照、词库)只存本机,卸载即清除
+> - 大版本升级浏览器可能提示权限变更,属于正常现象(同步功能需要各平台站点权限)
+
+## ⚡ 快速上手(第一次使用)
+
+1. **配置 AI(可选但推荐)**:悬浮球 → 面板右上角「设置」→ 选择 AI 服务商预设 → 填入你的 API Key → 点「测试连接」看到延迟即成功。不用 AI 功能可跳过,排版/检查/同步全部离线可用
+2. **写一篇文章测试**:在编辑器里随便打几段话 → 悬浮球 → 「排版」→ 点「一键规范」和主题卡片 → 手机预览满意后点「套用」
+3. **试试 AI 创作**:「AI写」页填一个选题 → 生成初稿 → 插入编辑器 → 生成标题点「采用」
+4. **发布前**:「检查」页跑一次规则体检 + AI 校对;要分发就到「同步」页勾选平台点「一键同步」
 
 ## 🚀 七个标签页
 
@@ -116,7 +127,7 @@
 ## 📁 目录结构
 
 ```
-mopai-extension/
+niuge-gzh-assistant/
 ├── manifest.json          # MV3 清单(v1.1:后台 worker、DNR、多站点权限)
 ├── background/
 │   └── service-worker.js  # AI 请求代理 + 知乎/掘金适配器
