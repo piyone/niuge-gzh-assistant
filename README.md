@@ -1,6 +1,6 @@
 # 牛哥公众号助手(浏览器插件)
 
-在**公众号后台编辑器页面内**直接完成排版、校对、多平台分发,不用切换到任何第三方网站。
+公众号一站式创作助手:Markdown 一键导入、中文排版规范、外链脚注化、违禁词检查、AI 写文章/AI 标题/AI 摘要、AI 校对、一键同步 13 个平台草稿箱、主题美化、手机预览、防丢稿快照
 
 ![版本](https://img.shields.io/badge/version-1.7.27-blue) ![协议](https://img.shields.io/badge/license-MIT-green)
 
