@@ -49,8 +49,8 @@ await mopai.inject(article.html); // 直接注入公众号编辑器
 
   const DEFAULT_SETTINGS = {
     theme: 'elegant',
-    fontSize: 15,
-    lineHeight: 1.8,
+    fontSize: 16, // 对齐微信编辑器正文默认字号
+    lineHeight: 1.75, // 对齐微信编辑器默认行距
     letterSpacing: 0.5, // 正文字间距(px),0 = 紧凑
     imgRadius: 4, // 图片圆角(px),0 = 直角
     sidePad: 0, // 正文两侧边距(px),0 = 不加留白
@@ -1020,7 +1020,7 @@ await mopai.inject(article.html); // 直接注入公众号编辑器
       <div class="mopai-slider-row"><label>字号 <b id="mopai-fs-val">${settings.fontSize}</b>px</label>
         <input type="range" id="mopai-fs" min="13" max="18" step="1" value="${settings.fontSize}"></div>
       <div class="mopai-slider-row"><label>行距 <b id="mopai-lh-val">${settings.lineHeight}</b></label>
-        <input type="range" id="mopai-lh" min="15" max="24" step="1" value="${Math.round(settings.lineHeight * 10)}"></div>
+        <input type="range" id="mopai-lh" min="150" max="300" step="25" value="${Math.round(settings.lineHeight * 100)}"></div>
       <div class="mopai-slider-row"><label>字间距 <b id="mopai-ls-val">${settings.letterSpacing}</b>px</label>
         <input type="range" id="mopai-ls" min="0" max="3" step="0.5" value="${settings.letterSpacing}"></div>
       <div class="mopai-slider-row"><label>图片圆角 <b id="mopai-ir-val">${settings.imgRadius}</b>px</label>
@@ -1170,7 +1170,7 @@ await mopai.inject(article.html); // 直接注入公众号编辑器
       await saveSettings(); refreshPreview();
     });
     p.querySelector('#mopai-lh').addEventListener('input', async (e) => {
-      settings.lineHeight = +e.target.value / 10;
+      settings.lineHeight = +e.target.value / 100;
       p.querySelector('#mopai-lh-val').textContent = settings.lineHeight;
       await saveSettings(); refreshPreview();
     });
