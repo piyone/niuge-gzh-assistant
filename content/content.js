@@ -600,7 +600,7 @@ await mopai.inject(article.html); // 直接注入公众号编辑器
   /** 检测 AI 模型是否已配置好;返回 {ok, missing[], provider, model, host} */
   function getAiStatus() {
     const ai = (settings && settings.ai) || {};
-    const provider = ai.provider || 'aitools';
+    const provider = ai.provider || 'deepseek';
     const missing = [];
     if (!ai.baseUrl) missing.push('接口地址');
     if (!ai.model) missing.push('模型');

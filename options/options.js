@@ -49,7 +49,6 @@ async function setSettings(s) {
   // ---------------- AI 模型配置 ----------------
 
   const AI_PROVIDERS = [
-    { id: 'aitools', name: 'aitools.cfd(需自备 Key)', url: 'https://platform.aitools.cfd/api/v1/chat/completions', models: ['zhipu/glm-4-flash', 'zhipu/glm-4-air', 'openai/gpt-oss-20b', 'google/gemma-4-31b'] },
     { id: 'deepseek', name: 'DeepSeek', url: 'https://api.deepseek.com/v1/chat/completions', models: ['deepseek-chat', 'deepseek-reasoner'] },
     { id: 'zhipu', name: '智谱开放平台', url: 'https://open.bigmodel.cn/api/paas/v4/chat/completions', models: ['glm-4-flash', 'glm-4-air', 'glm-4-plus'] },
     { id: 'moonshot', name: '月之暗面 Kimi', url: 'https://api.moonshot.cn/v1/chat/completions', models: ['moonshot-v1-8k', 'moonshot-v1-32k', 'moonshot-v1-128k'] },
@@ -70,10 +69,16 @@ async function setSettings(s) {
   const testResult = document.getElementById('ai-test-result');
 
   s.ai.keys = s.ai.keys || {};
-  if (!s.ai.keys[s.ai.provider || 'aitools'] && s.ai.apiKey) {
-    s.ai.keys[s.ai.provider || 'aitools'] = s.ai.apiKey; // 迁移旧配置
+  if (s.ai.provider === 'aitools') {
+    // 旧版 aitools.cfd 预设已移除:迁移为「自定义接口」,原地址与 Key 原样保留可继续用
+    s.ai.keys.custom = s.ai.keys.custom || s.ai.keys.aitools || s.ai.apiKey || '';
+    s.ai.provider = 'custom';
+    delete s.ai.keys.aitools;
   }
-  s.ai.provider = s.ai.provider || 'aitools';
+  if (!s.ai.keys[s.ai.provider || 'deepseek'] && s.ai.apiKey) {
+    s.ai.keys[s.ai.provider || 'deepseek'] = s.ai.apiKey; // 迁移旧配置
+  }
+  s.ai.provider = s.ai.provider || 'deepseek';
 
   providerSel.innerHTML = AI_PROVIDERS
     .map((p) => `<option value="${p.id}"${p.id === s.ai.provider ? ' selected' : ''}>${p.name}</option>`).join('');

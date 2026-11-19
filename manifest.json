@@ -6,7 +6,6 @@
   "permissions": ["storage", "clipboardWrite", "activeTab", "declarativeNetRequest", "cookies", "contextMenus", "notifications", "scripting"],
   "host_permissions": [
     "<all_urls>",
-    "https://platform.aitools.cfd/*",
     "https://api.deepseek.com/*",
     "https://open.bigmodel.cn/*",
     "https://api.moonshot.cn/*",

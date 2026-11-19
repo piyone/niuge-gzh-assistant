@@ -107,7 +107,7 @@ Markdown 一键导入 · 中文排版规范 · 外链脚注化 · 违禁词检�
 
 ## 🤖 AI 模型配置
 
-- **9 个服务商预设一键切换**:aitools.cfd / DeepSeek / 智谱 / Kimi / 通义千问 / 硅基流动 / OpenRouter / Ollama 本地 / 自定义 OpenAI 兼容
+- **8 个服务商预设一键切换**:DeepSeek / 智谱 / Kimi / 通义千问 / 硅基流动 / OpenRouter / Ollama 本地 / 自定义 OpenAI 兼容
 - **Key 按服务商分别记忆**,密码框 + 一键显隐;全部仅存本机 `chrome.storage.local`,不上云
 - **测试连接**:真实调用验证 Key 与模型;401/404/429 给出针对性提示;自动检测 thinking 推理模型并警告换模型
 - 未配置时 AI 页面显示引导横幅,设置页修改**实时同步**到面板,无需刷新
