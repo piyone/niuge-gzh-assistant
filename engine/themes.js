@@ -106,6 +106,7 @@ window.MoPaiThemes = (() => {
     o = o || {};
     const fs = o.fontSize || 15;
     const lh = o.lineHeight || 1.8;
+    const ls = typeof o.letterSpacing === 'number' ? o.letterSpacing : 0.5; // 正文字间距(px)
     const imgRadius = typeof o.imgRadius === 'number' ? o.imgRadius : 4; // 图片圆角,0 = 直角
     const pGap = Math.round(fs * (lh - 0.55)); // 段间距随字号行距联动
     const flavor = o.flavor || 'bar-h2';
@@ -129,14 +130,14 @@ window.MoPaiThemes = (() => {
     map['h5'] = `margin:20px 0 10px;font-size:${fs}px;font-weight:700;color:${v.secondary};`;
     map['h6'] = `margin:20px 0 10px;font-size:${fs - 1}px;font-weight:700;color:${v.secondary};`;
 
-    map['p'] = `margin:${pGap}px 0;font-size:${fs}px;line-height:${lh};color:${v.text};letter-spacing:.4px;text-align:justify;word-break:break-word;`;
+    map['p'] = `margin:${pGap}px 0;font-size:${fs}px;line-height:${lh};color:${v.text};letter-spacing:${ls}px;text-align:justify;word-break:break-word;`;
     map['blockquote'] = `border-left:3px solid ${v.blockBar};background:${v.blockBg};padding:12px 16px;margin:${pGap + 4}px 0;border-radius:0 4px 4px 0;`;
-    map['blockquote p'] = `margin:6px 0;font-size:${fs - 1}px;line-height:${lh};color:${v.secondary};text-align:justify;`;
+    map['blockquote p'] = `margin:6px 0;font-size:${fs - 1}px;line-height:${lh};color:${v.secondary};letter-spacing:${ls}px;text-align:justify;`;
     map['blockquote h1,blockquote h2,blockquote h3,blockquote h4'] = `margin:8px 0;font-size:${fs}px;`;
 
     map['ul'] = `margin:${pGap}px 0;padding-left:1.6em;`;
     map['ol'] = `margin:${pGap}px 0;padding-left:1.6em;`;
-    map['li'] = `margin:7px 0;font-size:${fs}px;line-height:${lh};color:${v.text};text-align:justify;`;
+    map['li'] = `margin:7px 0;font-size:${fs}px;line-height:${lh};color:${v.text};letter-spacing:${ls}px;text-align:justify;`;
     map['li p'] = `margin:4px 0;`;
 
     map['img'] = `display:block;margin:${Math.round(pGap / 2)}px auto;max-width:100%;border-radius:${imgRadius}px;box-shadow:0 3px 10px rgba(0,0,0,.12);`;

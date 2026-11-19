@@ -51,6 +51,7 @@ await mopai.inject(article.html); // 直接注入公众号编辑器
     theme: 'elegant',
     fontSize: 15,
     lineHeight: 1.8,
+    letterSpacing: 0.5, // 正文字间距(px),0 = 紧凑
     imgRadius: 4, // 图片圆角(px),0 = 直角
     sidePad: 0, // 正文两侧边距(px),0 = 不加留白
     rules: { pad: true, punct: true, blank: true, footnote: true, ellipsis: true, collapse: false },
@@ -121,7 +122,7 @@ await mopai.inject(article.html); // 直接注入公众号编辑器
 
   /** 主题相关覆盖项(预览 / 套主题共用) */
   function fmtThemeOverrides() {
-    return { fontSize: settings.fontSize, lineHeight: settings.lineHeight, imgRadius: settings.imgRadius, sidePad: settings.sidePad };
+    return { fontSize: settings.fontSize, lineHeight: settings.lineHeight, letterSpacing: settings.letterSpacing, imgRadius: settings.imgRadius, sidePad: settings.sidePad };
   }
 
   // ---------------- 编辑器定位与注入 ----------------
@@ -926,7 +927,7 @@ await mopai.inject(article.html); // 直接注入公众号编辑器
       if (!md) { preview.innerHTML = ''; report.textContent = '输入 Markdown 后自动渲染预览'; lastMdHtml = ''; return; }
       try {
         const r = window.MoPaiRender.renderMarkdown(md, settings.theme, {
-          fontSize: settings.fontSize, lineHeight: settings.lineHeight, imgRadius: settings.imgRadius, sidePad: settings.sidePad,
+          fontSize: settings.fontSize, lineHeight: settings.lineHeight, letterSpacing: settings.letterSpacing, imgRadius: settings.imgRadius, sidePad: settings.sidePad,
           padSpaces: settings.rules.pad, punct: settings.rules.punct,
           blank: settings.rules.blank, footnote: settings.rules.footnote,
           ellipsis: settings.rules.ellipsis !== false, collapse: settings.rules.collapse === true,
@@ -1020,6 +1021,8 @@ await mopai.inject(article.html); // 直接注入公众号编辑器
         <input type="range" id="mopai-fs" min="13" max="18" step="1" value="${settings.fontSize}"></div>
       <div class="mopai-slider-row"><label>行距 <b id="mopai-lh-val">${settings.lineHeight}</b></label>
         <input type="range" id="mopai-lh" min="15" max="24" step="1" value="${Math.round(settings.lineHeight * 10)}"></div>
+      <div class="mopai-slider-row"><label>字间距 <b id="mopai-ls-val">${settings.letterSpacing}</b>px</label>
+        <input type="range" id="mopai-ls" min="0" max="3" step="0.5" value="${settings.letterSpacing}"></div>
       <div class="mopai-slider-row"><label>图片圆角 <b id="mopai-ir-val">${settings.imgRadius}</b>px</label>
         <input type="range" id="mopai-ir" min="0" max="16" step="1" value="${settings.imgRadius}"></div>
       <div class="mopai-slider-row"><label>两侧边距 <b id="mopai-sp-val">${settings.sidePad}</b>px</label>
@@ -1069,7 +1072,7 @@ await mopai.inject(article.html); // 直接注入公众号编辑器
         await pushSnapshotHistory(srcT.innerHTML);
         // 公众号编辑器是 ProseMirror 内核,直接改 DOM 会被其内部状态还原;
         // 必须走"克隆处理 → 全选粘贴整篇替换"的管线(injectHtml 已同步 PM 内部全选)
-        const html = window.MoPaiRender.themeExisting(srcT, settings.theme, { fontSize: settings.fontSize, lineHeight: settings.lineHeight, imgRadius: settings.imgRadius, sidePad: settings.sidePad });
+        const html = window.MoPaiRender.themeExisting(srcT, settings.theme, fmtThemeOverrides());
         await injectHtml(html);
         refreshPreview();
         toast(`已套用「${themeName()}」主题 ✅(注入前已存快照)`);
@@ -1138,7 +1141,7 @@ await mopai.inject(article.html); // 直接注入公众号编辑器
       // 故克隆 → 排版处理 → 全选粘贴整篇替换(injectHtml 内已用 execCommand('selectAll') 同步内部选区,不会重复)
       const rep = window.MoPaiTypo.normalizeExisting(src, o);
       if (act === 'fmt-all') {
-        window.MoPaiRender.themeExisting(src, settings.theme, { fontSize: settings.fontSize, lineHeight: settings.lineHeight, imgRadius: settings.imgRadius, sidePad: settings.sidePad });
+        window.MoPaiRender.themeExisting(src, settings.theme, fmtThemeOverrides());
       }
       const r = await injectHtml(src.innerHTML);
       report.innerHTML = !r.ok
@@ -1169,6 +1172,11 @@ await mopai.inject(article.html); // 直接注入公众号编辑器
     p.querySelector('#mopai-lh').addEventListener('input', async (e) => {
       settings.lineHeight = +e.target.value / 10;
       p.querySelector('#mopai-lh-val').textContent = settings.lineHeight;
+      await saveSettings(); refreshPreview();
+    });
+    p.querySelector('#mopai-ls').addEventListener('input', async (e) => {
+      settings.letterSpacing = +e.target.value;
+      p.querySelector('#mopai-ls-val').textContent = e.target.value;
       await saveSettings(); refreshPreview();
     });
     p.querySelector('#mopai-ir').addEventListener('input', async (e) => {
@@ -1698,7 +1706,7 @@ await mopai.inject(article.html); // 直接注入公众号编辑器
     const renderResult = () => {
       let rendered;
       try {
-        rendered = window.MoPaiRender.renderMarkdown(article, settings.theme, { footnote: false, fontSize: settings.fontSize, lineHeight: settings.lineHeight, imgRadius: settings.imgRadius, sidePad: settings.sidePad }).html;
+        rendered = window.MoPaiRender.renderMarkdown(article, settings.theme, { footnote: false, ...fmtThemeOverrides() }).html;
       } catch (e) {
         rendered = esc(article);
       }
@@ -1786,7 +1794,7 @@ await mopai.inject(article.html); // 直接注入公众号编辑器
         try {
           await saveSnapshot(cur ? cur.innerHTML : '');
           await pushSnapshotHistory(cur ? cur.innerHTML : '');
-          const r = window.MoPaiRender.renderMarkdown(article, settings.theme, { footnote: false, fontSize: settings.fontSize, lineHeight: settings.lineHeight, imgRadius: settings.imgRadius, sidePad: settings.sidePad });
+          const r = window.MoPaiRender.renderMarkdown(article, settings.theme, { footnote: false, ...fmtThemeOverrides() });
           if (replace) {
             await injectHtml(r.html);
           } else {

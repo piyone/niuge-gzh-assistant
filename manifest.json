@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "牛哥公众号助手",
-  "version": "1.7.27",
+  "version": "1.7.28",
   "description": "公众号一站式创作助手:Markdown 一键导入、中文排版规范、外链脚注化、违禁词检查、AI 写文章/AI 标题/AI 摘要、AI 校对、一键同步 13 个平台草稿箱、主题美化、手机预览、防丢稿快照。",
   "permissions": ["storage", "clipboardWrite", "activeTab", "declarativeNetRequest", "cookies"],
   "host_permissions": [

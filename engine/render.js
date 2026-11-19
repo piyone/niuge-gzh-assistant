@@ -50,6 +50,7 @@ window.MoPaiRender = (() => {
     const styleOpts = {
       fontSize: (overrides && overrides.fontSize) || 15,
       lineHeight: (overrides && overrides.lineHeight) || 1.8,
+      letterSpacing: typeof (overrides && overrides.letterSpacing) === 'number' ? overrides.letterSpacing : 0.5,
       imgRadius: typeof (overrides && overrides.imgRadius) === 'number' ? overrides.imgRadius : 4,
       flavor: theme.flavor,
     };
@@ -166,6 +167,7 @@ window.MoPaiRender = (() => {
     const styleMap = window.MoPaiThemes.makeStyleMap(theme.vars, {
       fontSize: (overrides && overrides.fontSize) || 15,
       lineHeight: (overrides && overrides.lineHeight) || 1.8,
+      letterSpacing: typeof (overrides && overrides.letterSpacing) === 'number' ? overrides.letterSpacing : 0.5,
       imgRadius: typeof (overrides && overrides.imgRadius) === 'number' ? overrides.imgRadius : 4,
       flavor: theme.flavor,
     });
