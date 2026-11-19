@@ -202,24 +202,35 @@ async function withMpReferer(fn) {
   }
 }
 
+/** 最近一次票据失败时抓到的原始页面片段(用于诊断环境拦截) */
+let mpTicketDiag = '';
+
 /**
  * 取上传票据 ticket_id。新版后台 filepage 接口可能返回 200009(not found),
  * 因此按多来源尝试:主页内嵌 commonData → 素材库 JSON → 素材库 HTML →
- * 图文列表页 → 新建图文页(编辑器页面一定带 ticket_id)。
- * 全部失败时抛出含各来源真实错误码的异常。
+ * 图库页(appmsgphoto) → 图文列表页 → 新建图文页。
+ * 全部失败时抛出含各来源真实错误码的异常,并把第一个 HTML 页面片段存入 mpTicketDiag。
  */
 async function getMpTicketId(token, homeHtml) {
   const errors = [];
+  mpTicketDiag = '';
   // 0) 主页 HTML 里内嵌的 wx.commonData.ticket_id
   const mHome = (homeHtml || '').match(/ticket_id["':=\s]{1,4}([A-Za-z0-9_\-]{6,})/);
   if (mHome) return mHome[1];
   errors.push('主页无ticket_id');
 
   const fetchText = async (url) => {
-    const resp = await withMpReferer(() => fetchWithTimeout(url, { credentials: 'include' }, 20000));
+    // X-Requested-With 是微信后台 AJAX 的标准头,缺失可能触发环境校验拦截页
+    const resp = await withMpReferer(() => fetchWithTimeout(url, {
+      credentials: 'include',
+      headers: { 'X-Requested-With': 'XMLHttpRequest' },
+    }, 20000));
     return resp.text();
   };
-  const pageTitle = (t) => ((t.match(/<title>([^<]{0,60})/) || [])[1] || '').trim();
+  const pageTitle = (t) => {
+    const m = t.match(/<title[^>]*>([\s\S]{0,80})</);
+    return m ? m[1].trim() : '';
+  };
 
   // 1) 素材库列表:JSON 版 + HTML 版
   const fileBase = 'https://mp.weixin.qq.com/cgi-bin/filepage?action=get_all_materials&query_type=2&begincount=0&count=1';
@@ -240,13 +251,15 @@ async function getMpTicketId(token, homeHtml) {
       } else {
         const m = text.match(/ticket_id["':=\s]{1,4}([A-Za-z0-9_\-]{6,})/);
         if (m) return m[1];
+        if (!mpTicketDiag) mpTicketDiag = '[拦截页片段] ' + text.slice(0, 600);
         errors.push(`filepage HTML(${text.length}字符,${pageTitle(text) || '无title'})`);
       }
     } catch (e) { errors.push('filepage:' + e.message); }
   }
 
-  // 2) 图文列表页 / 新建图文页(编辑器页内嵌 commonData.ticket_id)
+  // 2) 图库 / 图文列表 / 新建图文页(编辑器相关页面内嵌 commonData.ticket_id)
   for (const url of [
+    `https://mp.weixin.qq.com/cgi-bin/appmsgphoto?action=main&token=${token}&lang=zh_CN`,
     `https://mp.weixin.qq.com/cgi-bin/appmsg?action=index&page=0&count=1&type=10&token=${token}&lang=zh_CN`,
     `https://mp.weixin.qq.com/cgi-bin/operate_appmsg?action=main&type=10&token=${token}&lang=zh_CN`,
   ]) {
@@ -255,6 +268,7 @@ async function getMpTicketId(token, homeHtml) {
       const text = await fetchText(url);
       const m = text.match(/ticket_id["':=\s]{1,4}([A-Za-z0-9_\-]{6,})/);
       if (m) return m[1];
+      if (!mpTicketDiag) mpTicketDiag = '[拦截页片段] ' + text.slice(0, 600);
       errors.push(`${action} 无ticket(${text.length}字符,${pageTitle(text) || '无title'})`);
     } catch (e) { errors.push(action + ':' + e.message); }
   }
@@ -327,7 +341,7 @@ async function uploadWithToken(token, srcUrl, pageUrl, homeHtml) {
     const r = await uploadToMaterial(token, ticketId, blob, 'mopai_' + Date.now() + extForType(blob.type));
     return r;
   } catch (e) {
-    return { ok: false, error: e.message || '采集失败', detail: '' };
+    return { ok: false, error: e.message || '采集失败', detail: mpTicketDiag || '' };
   }
 }
 
