@@ -163,7 +163,9 @@ window.MoPaiThemes = (() => {
 
     // 微信编辑器的内容大量使用 section/span/font 包装并残留旧模板内联样式,
     // 格式刷时必须清掉,否则新主题与旧样式混搭。span 清空 = 继承父级主题样式。
-    map['section'] = `margin:0;padding:0;`;
+    // section 是微信编辑器原生段落容器,必须带上字号/行距/字间距,
+    // 否则直接躺在 section 里的文字吃不到这些滑杆设置(此前行距"不生效"的根因)。
+    map['section'] = `margin:0;padding:0;font-size:${fs}px;line-height:${lh};letter-spacing:${ls}px;`;
     map['span'] = ``;
     map['font'] = ``;
     map['u'] = ``;
