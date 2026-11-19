@@ -118,6 +118,127 @@ async function handleAiTest(msg) {
   }
 }
 
+// ---------------- 右键菜单:采集图片到公众号素材库 ----------------
+// 流程(与 wechatsync 微信适配器同款):主页拿 token → 素材列表拿 ticket_id →
+// POST filetransfer?action=upload_material 带 cookie 上传 → 返回 cdn_url。
+// 防盗链图:临时 DNR 会话规则把 Referer 伪装成图片所在页面。
+
+const MP_UPLOAD_MENU = 'mopai-save-img';
+
+chrome.runtime.onInstalled.addListener(() => {
+  try {
+    chrome.contextMenus.removeAll(() => {
+      chrome.contextMenus.create({
+        id: MP_UPLOAD_MENU,
+        title: '采集图片到公众号素材库',
+        contexts: ['image'],
+      });
+    });
+  } catch (e) { /* ignore */ }
+});
+
+function mpNotify(title, message) {
+  try {
+    chrome.notifications.create({
+      type: 'basic',
+      iconUrl: 'icons/icon128.png',
+      title,
+      message: String(message || '').slice(0, 200),
+    });
+  } catch (e) { /* ignore */ }
+}
+
+/** 公众号后台登录态与 token(未登录时页面没有 token 链接) */
+async function getMpAuth() {
+  const resp = await fetchWithTimeout('https://mp.weixin.qq.com/', { credentials: 'include' }, 20000);
+  const html = await resp.text();
+  const token = (html.match(/token=(\d{2,})/) || [])[1];
+  return token ? { token } : null;
+}
+
+/** 从素材库列表接口取 ticket_id(与 wechatsync getTicketId 相同流程) */
+async function getMpTicketId(token) {
+  const url = 'https://mp.weixin.qq.com/cgi-bin/filepage?action=get_all_materials&query_type=2&begincount=0&count=1' +
+    `&token=${token}&lang=zh_CN&f=json&ajax=1&random=${Math.random()}`;
+  const resp = await fetchWithTimeout(url, { credentials: 'include' }, 20000);
+  const data = await resp.json();
+  const item = data && data.data && data.data.file_item && data.data.file_item[0];
+  return (item && item.ticket_id) || null;
+}
+
+/** 临时 Referer 伪装再抓图(防盗链),失败降级为直接抓 */
+async function fetchImageBlob(srcUrl, pageUrl) {
+  if (/^(blob:|chrome[^:]*:|moz-)/i.test(srcUrl)) throw new Error('不支持浏览器内部资源,请对普通图片链接使用');
+  const referer = pageUrl || 'https://mp.weixin.qq.com/';
+  const doFetch = () => fetchWithTimeout(srcUrl, { credentials: 'omit' }, 30000);
+  let resp = null;
+  try {
+    if (chrome.declarativeNetRequest) {
+      const ruleId = 70000 + (Date.now() % 20000);
+      await chrome.declarativeNetRequest.updateSessionRules({
+        addRules: [{
+          id: ruleId,
+          priority: 1,
+          action: { type: 'modifyHeaders', requestHeaders: [{ header: 'Referer', operation: 'set', value: referer }] },
+          condition: { regexFilter: srcUrl.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), resourceTypes: ['xmlhttprequest'] },
+        }],
+      });
+      try { resp = await doFetch(); } finally {
+        try { await chrome.declarativeNetRequest.updateSessionRules({ removeRuleIds: [ruleId] }); } catch (e) { /* ignore */ }
+      }
+    }
+    if (!resp) resp = await doFetch();
+  } catch (e) {
+    resp = await doFetch(); // DNR 失败时直接试一次
+  }
+  if (!resp.ok) throw new Error(`图片下载失败(HTTP ${resp.status})`);
+  const blob = await resp.blob();
+  if (!blob.size) throw new Error('图片内容为空,可能被站点防盗链拦截');
+  return blob;
+}
+
+function extForType(type) {
+  const m = /image\/(png|jpeg|gif|webp|bmp)/.exec(type || '');
+  return m ? '.' + (m[1] === 'jpeg' ? 'jpg' : m[1]) : '.png';
+}
+
+/** 上传到公众号素材库,返回 cdn_url */
+async function uploadToMaterial(token, ticketId, blob, filename) {
+  const form = new FormData();
+  form.append('file', blob, filename);
+  const url = 'https://mp.weixin.qq.com/cgi-bin/filetransfer?action=upload_material&f=json&scene=8&writetype=doublewrite&groupid=1' +
+    `&ticket_id=${encodeURIComponent(ticketId)}&svr_time=${Math.floor(Date.now() / 1000)}&token=${token}&lang=zh_CN&seq=${Date.now()}`;
+  const resp = await fetchWithTimeout(url, { method: 'POST', body: form, credentials: 'include' }, 60000);
+  const data = await resp.json();
+  const ret = data && data.base_resp && data.base_resp.ret;
+  if (ret !== 0) {
+    const reason = ret === -3 ? '(登录态过期,请重新登录公众号)' : ret === 200013 ? '(频率限制,稍后再试)' : '';
+    throw new Error(`上传被拒(ret=${ret})${reason}`);
+  }
+  if (!data.content) throw new Error('上传成功但未返回图片地址');
+  return data.content;
+}
+
+async function collectImage(info) {
+  const srcUrl = info.srcUrl;
+  if (!srcUrl) { mpNotify('采集失败', '未获取到图片地址'); return; }
+  try {
+    const auth = await getMpAuth();
+    if (!auth) { mpNotify('采集失败', '未登录公众号后台,请先打开 mp.weixin.qq.com 登录一次'); return; }
+    const blob = await fetchImageBlob(srcUrl, info.pageUrl);
+    const ticketId = await getMpTicketId(auth.token);
+    if (!ticketId) { mpNotify('采集失败', '获取上传票据失败:请先在公众号后台打开一次「素材库」页面再试'); return; }
+    const cdn = await uploadToMaterial(auth.token, ticketId, blob, 'mopai_' + Date.now() + extForType(blob.type));
+    mpNotify('✅ 已采集到公众号素材库', cdn);
+  } catch (e) {
+    mpNotify('采集失败', e.message || '未知错误');
+  }
+}
+
+chrome.contextMenus.onClicked.addListener((info) => {
+  if (info.menuItemId === MP_UPLOAD_MENU) collectImage(info);
+});
+
 // ---------------- 消息路由 ----------------
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
