@@ -179,27 +179,75 @@ async function listMpAccounts() {
   return { accounts, html, url: resp.url };
 }
 
-/** mp 后台 cgi 请求统一带 Referer(部分接口校验来源),临时 DNR 会话规则 */
-async function withMpReferer(fn) {
-  let ruleId;
-  try {
-    if (chrome.declarativeNetRequest) {
-      ruleId = 69000 + (Date.now() % 1000);
-      await chrome.declarativeNetRequest.updateSessionRules({
-        addRules: [{
-          id: ruleId,
-          priority: 1,
-          action: { type: 'modifyHeaders', requestHeaders: [{ header: 'Referer', operation: 'set', value: 'https://mp.weixin.qq.com/' }] },
-          condition: { regexFilter: '^https://mp\\.weixin\\.qq\\.com/', resourceTypes: ['xmlhttprequest'] },
-        }],
+/**
+ * mp 后台 cgi 请求的"页面中继":微信对扩展后台发起的 cgi 请求一律返回 error 页(环境校验),
+ * 但页面内的同源请求不会。因此复用(或后台新建)一个 mp 标签页,用 chrome.scripting
+ * 在页面上下文里发 fetch——与真实用户操作完全同源,不会被拦。
+ */
+let mpTabPromise = null;
+function ensureMpTab() {
+  if (!mpTabPromise) {
+    mpTabPromise = (async () => {
+      const tabs = await chrome.tabs.query({ url: 'https://mp.weixin.qq.com/*' });
+      if (tabs.length) return tabs[0].id;
+      const tab = await chrome.tabs.create({ url: 'https://mp.weixin.qq.com/', active: false });
+      await new Promise((resolve) => {
+        const listener = (id, info) => {
+          if (id === tab.id && info.status === 'complete') {
+            chrome.tabs.onUpdated.removeListener(listener);
+            resolve();
+          }
+        };
+        chrome.tabs.onUpdated.addListener(listener);
+        setTimeout(resolve, 15000); // 兜底,避免页面一直挂起
       });
-    }
-    return await fn();
-  } finally {
-    if (ruleId !== undefined) {
-      try { await chrome.declarativeNetRequest.updateSessionRules({ removeRuleIds: [ruleId] }); } catch (e) { /* ignore */ }
-    }
+      return tab.id;
+    })().catch((e) => { mpTabPromise = null; throw e; });
   }
+  return mpTabPromise;
+}
+
+/** 在 mp 页面上下文里 GET 文本 */
+async function mpPageFetchText(url) {
+  const tabId = await ensureMpTab();
+  const res = await chrome.scripting.executeScript({
+    target: { tabId },
+    func: (u) => fetch(u, { credentials: 'include' }).then((r) => r.text()),
+    args: [url],
+  });
+  const out = res && res[0] && res[0].result;
+  if (typeof out !== 'string') throw new Error('页面中继无返回(标签页可能刚打开,请重试)');
+  return out;
+}
+
+/** 在 mp 页面上下文里 POST multipart 上传(SW↔页面用 base64 传图片) */
+async function mpPageUpload(url, b64, mime, filename) {
+  const tabId = await ensureMpTab();
+  const res = await chrome.scripting.executeScript({
+    target: { tabId },
+    func: async (u, data, m, name) => {
+      const bin = atob(data);
+      const bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      const form = new FormData();
+      form.append('file', new Blob([bytes], { type: m }), name);
+      const r = await fetch(u, { method: 'POST', body: form, credentials: 'include' });
+      return r.text();
+    },
+    args: [url, b64, mime, filename],
+  });
+  const out = res && res[0] && res[0].result;
+  if (typeof out !== 'string') throw new Error('上传中继无返回(标签页可能刚打开,请重试)');
+  return out;
+}
+
+function blobToBase64(blob) {
+  return new Promise((resolve, reject) => {
+    const fr = new FileReader();
+    fr.onload = () => resolve(String(fr.result).split(',')[1] || '');
+    fr.onerror = () => reject(new Error('图片编码失败'));
+    fr.readAsDataURL(blob);
+  });
 }
 
 /** 最近一次票据失败时抓到的原始页面片段(用于诊断环境拦截) */
@@ -219,14 +267,7 @@ async function getMpTicketId(token, homeHtml) {
   if (mHome) return mHome[1];
   errors.push('主页无ticket_id');
 
-  const fetchText = async (url) => {
-    // X-Requested-With 是微信后台 AJAX 的标准头,缺失可能触发环境校验拦截页
-    const resp = await withMpReferer(() => fetchWithTimeout(url, {
-      credentials: 'include',
-      headers: { 'X-Requested-With': 'XMLHttpRequest' },
-    }, 20000));
-    return resp.text();
-  };
+  const fetchText = (url) => mpPageFetchText(url); // 经页面中继,同源请求不被环境校验拦截
   const pageTitle = (t) => {
     const m = t.match(/<title[^>]*>([\s\S]{0,80})</);
     return m ? m[1].trim() : '';
@@ -312,14 +353,12 @@ function extForType(type) {
   return m ? '.' + (m[1] === 'jpeg' ? 'jpg' : m[1]) : '.png';
 }
 
-/** 上传到公众号素材库,返回 {ok, url} 或 {ok:false, error, detail} */
+/** 上传到公众号素材库(经页面中继同源上传),返回 {ok, url} 或 {ok:false, error, detail} */
 async function uploadToMaterial(token, ticketId, blob, filename) {
-  const form = new FormData();
-  form.append('file', blob, filename);
   const url = 'https://mp.weixin.qq.com/cgi-bin/filetransfer?action=upload_material&f=json&scene=8&writetype=doublewrite&groupid=1' +
     `&ticket_id=${encodeURIComponent(ticketId)}&svr_time=${Math.floor(Date.now() / 1000)}&token=${token}&lang=zh_CN&seq=${Date.now()}`;
-  const resp = await withMpReferer(() => fetchWithTimeout(url, { method: 'POST', body: form, credentials: 'include' }, 60000));
-  const text = await resp.text();
+  const b64 = await blobToBase64(blob);
+  const text = await mpPageUpload(url, b64, blob.type || 'image/png', filename);
   let data = null;
   try { data = JSON.parse(text); } catch (e) { /* 非 JSON */ }
   if (!data) return { ok: false, error: '上传接口返回了非 JSON 响应(可能登录态失效,请重新登录公众号)', detail: text.slice(0, 300) };
