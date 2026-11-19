@@ -300,21 +300,33 @@ async function fetchImageBlob(srcUrl, pageUrl) {
   return blob;
 }
 
-function extForType(type) {
-  const m = /image\/(png|jpeg|gif|webp|bmp)/.exec(type || '');
-  return m ? '.' + (m[1] === 'jpeg' ? 'jpg' : m[1]) : '.png';
+/**
+ * webp/avif 等微信不支持的格式先转成 png(createImageBitmap 支持解码几乎所有网页图片格式);
+ * jpg/png/gif 原样直传,避免转码损耗。
+ */
+async function normalizeImageBlob(blob) {
+  if (/^image\/(jpeg|png|gif)$/.test(blob.type || '')) return blob;
+  try {
+    const bitmap = await createImageBitmap(blob);
+    const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
+    canvas.getContext('2d').drawImage(bitmap, 0, 0);
+    const out = await canvas.convertToBlob({ type: 'image/png' });
+    return out.size ? out : blob;
+  } catch (e) {
+    return blob; // 解码失败就让服务器嗅探(与 wechatsync 行为一致)
+  }
 }
 
 /** 上传到公众号素材库(经页面中继同源上传),返回 {ok, url} 或 {ok:false, error, detail}
- * 参考 wechatsync v2:ticket_id 参数填 user_name,ticket 参数填 commonData.ticket,
- * svr_time 用主页返回的服务器时间,FormData 需带 5 个元数据字段。 */
-async function uploadToMaterial(meta, blob, filename) {
+ * 参考 wechatsync v2:文件名一律 <时间戳>.jpg(接口对扩展名敏感,webp/avif 名会被 ret=200039 拒),
+ * ticket_id 参数填 user_name,ticket 参数填 commonData.ticket,svr_time 用主页服务器时间。 */
+async function uploadToMaterial(meta, blob) {
   const seq = Date.now();
   const url = 'https://mp.weixin.qq.com/cgi-bin/filetransfer?action=upload_material&f=json&scene=8&writetype=doublewrite&groupid=1' +
     `&ticket_id=${encodeURIComponent(meta.userName)}&ticket=${encodeURIComponent(meta.ticket || '')}` +
     `&svr_time=${meta.svrTime}&token=${meta.token}&lang=zh_CN&seq=${seq}&t=${Math.random()}`;
   const b64 = await blobToBase64(blob);
-  const text = await mpPageUpload(url, b64, blob.type || 'image/jpeg', filename);
+  const text = await mpPageUpload(url, b64, blob.type || 'image/jpeg', seq + '.jpg');
   let data = null;
   try { data = JSON.parse(text); } catch (e) { /* 非 JSON */ }
   if (!data) return { ok: false, error: '上传接口返回了非 JSON 响应(可能登录态失效,请重新登录公众号)', detail: text.slice(0, 300) };
@@ -333,7 +345,7 @@ async function uploadToMaterial(meta, blob, filename) {
 async function uploadWithAccount(acc, srcUrl, pageUrl) {
   try {
     let meta = acc;
-    const blob = await fetchImageBlob(srcUrl, pageUrl);
+    const blob = await normalizeImageBlob(await fetchImageBlob(srcUrl, pageUrl));
     // 元信息缺失(如旧缓存):经页面中继重新拉该账号主页解析
     if (!meta.ticket || !meta.userName) {
       const h = await mpPageFetchText(`https://mp.weixin.qq.com/cgi-bin/home?t=home&token=${meta.token}&lang=zh_CN`);
@@ -341,7 +353,7 @@ async function uploadWithAccount(acc, srcUrl, pageUrl) {
       if (!m) throw new Error('主页缺少 ticket/user_name 字段,页面结构可能已变化,请反馈');
       meta = m;
     }
-    const r = await uploadToMaterial(meta, blob, Date.now() + extForType(blob.type));
+    const r = await uploadToMaterial(meta, blob);
     return r;
   } catch (e) {
     return { ok: false, error: e.message || '采集失败', detail: '' };
