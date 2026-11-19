@@ -106,7 +106,7 @@
     $('okActions').style.display = 'none';
     $('step1').classList.add('doing');
 
-    const r = await chrome.runtime.sendMessage({ type: 'mopai-collect-upload', token: acc.token, srcUrl: SRC, pageUrl: PAGE });
+    const r = await chrome.runtime.sendMessage({ type: 'mopai-collect-upload', account: acc, srcUrl: SRC, pageUrl: PAGE });
 
     $('step1').classList.remove('doing');
     $('step2').classList.remove('doing');

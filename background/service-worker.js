@@ -168,15 +168,52 @@ async function notifyOrWindow(title, message) {
   if (!ok) showCollectError(title + ' — ' + message);
 }
 
-/** 抓主页,提取全部已登录账号(mp 多号登录会在页面里留多个 token) */
+/**
+ * 从 mp 主页 HTML 的 window.wx.commonData 全局数据里解析账号元信息。
+ * 参考 wechatsync v2 weixin.ts:token=t 字段,ticket/user_name/nick_name/head_img/time 同在,
+ * 无需调用素材库接口(旧版 filepage 取 ticket_id 的流程已废弃,现返回 200009)。
+ */
+function parseMpHomeMeta(html) {
+  if (!html) return null;
+  const start = html.indexOf('commonData');
+  if (start === -1) return null;
+  const block = html.slice(start, start + 6000);
+  const get = (re) => {
+    const m = block.match(re);
+    return m ? m[1] : '';
+  };
+  const token = get(/[{;]\s*t:\s*["'](\d{3,})["']/) || get(/token:\s*["'](\d{3,})["']/);
+  if (!token) return null;
+  let avatar = get(/head_img:\s*["']([^"']{6,})["']/);
+  if (avatar.startsWith('http://')) avatar = avatar.replace('http://', 'https://');
+  return {
+    token,
+    ticket: get(/ticket:\s*["']([^"']{6,})["']/),
+    userName: get(/user_name:\s*["']([^"']{4,})["']/),
+    nick: get(/nick_name:\s*["']([^"']{1,60})["']/),
+    avatar,
+    svrTime: get(/time:\s*["'](\d{9,})["']/) || String(Math.floor(Date.now() / 1000)),
+  };
+}
+
+/** 抓主页,提取全部已登录账号(主页 commonData 为主;多账号切换 token 经页面中继逐个取元信息) */
 async function listMpAccounts() {
   const resp = await fetchWithTimeout('https://mp.weixin.qq.com/', { credentials: 'include' }, 20000);
   const html = await resp.text();
+  const primary = parseMpHomeMeta(html);
   const tokens = [...new Set([...html.matchAll(/(?<![a-zA-Z_])token=(\d{3,})/g)].map((m) => m[1]))];
-  const nicks = [...html.matchAll(/nick_?name["']?\s*[:=]\s*["']([^"']{1,60})["']/g)].map((m) => m[1]);
-  const avatars = [...html.matchAll(/head_?img["']?\s*[:=]\s*["']([^"']{6,})["']/g)].map((m) => m[1]);
-  const accounts = tokens.map((token, i) => ({ token, nick: nicks[i] || '', avatar: avatars[i] || '' }));
-  return { accounts, html, url: resp.url };
+  const accounts = [];
+  if (primary) accounts.push(primary);
+  // 多账号:主页/账号切换页会列出其他已登录账号的 token,逐个(最多 3 个)取各自主页解析元信息
+  for (const tk of tokens.slice(0, 3)) {
+    if (primary && tk === primary.token) continue;
+    try {
+      const h = await mpPageFetchText(`https://mp.weixin.qq.com/cgi-bin/home?t=home&token=${tk}&lang=zh_CN`);
+      const m = parseMpHomeMeta(h);
+      if (m && !accounts.some((a) => a.token === m.token)) accounts.push(m);
+    } catch (e) { /* 中继失败时跳过该账号 */ }
+  }
+  return { accounts, html, url: resp.url, tokens };
 }
 
 /**
@@ -230,6 +267,12 @@ async function mpPageUpload(url, b64, mime, filename) {
       const bytes = new Uint8Array(bin.length);
       for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
       const form = new FormData();
+      // 微信上传接口要求的 5 个元数据字段(与网页端手动上传一致)
+      form.append('type', m);
+      form.append('id', String(Date.now()));
+      form.append('name', name);
+      form.append('lastModifiedDate', new Date().toString());
+      form.append('size', String(bytes.length));
       form.append('file', new Blob([bytes], { type: m }), name);
       const r = await fetch(u, { method: 'POST', body: form, credentials: 'include' });
       return r.text();
@@ -248,73 +291,6 @@ function blobToBase64(blob) {
     fr.onerror = () => reject(new Error('图片编码失败'));
     fr.readAsDataURL(blob);
   });
-}
-
-/** 最近一次票据失败时抓到的原始页面片段(用于诊断环境拦截) */
-let mpTicketDiag = '';
-
-/**
- * 取上传票据 ticket_id。新版后台 filepage 接口可能返回 200009(not found),
- * 因此按多来源尝试:主页内嵌 commonData → 素材库 JSON → 素材库 HTML →
- * 图库页(appmsgphoto) → 图文列表页 → 新建图文页。
- * 全部失败时抛出含各来源真实错误码的异常,并把第一个 HTML 页面片段存入 mpTicketDiag。
- */
-async function getMpTicketId(token, homeHtml) {
-  const errors = [];
-  mpTicketDiag = '';
-  // 0) 主页 HTML 里内嵌的 wx.commonData.ticket_id
-  const mHome = (homeHtml || '').match(/ticket_id["':=\s]{1,4}([A-Za-z0-9_\-]{6,})/);
-  if (mHome) return mHome[1];
-  errors.push('主页无ticket_id');
-
-  const fetchText = (url) => mpPageFetchText(url); // 经页面中继,同源请求不被环境校验拦截
-  const pageTitle = (t) => {
-    const m = t.match(/<title[^>]*>([\s\S]{0,80})</);
-    return m ? m[1].trim() : '';
-  };
-
-  // 1) 素材库列表:JSON 版 + HTML 版
-  const fileBase = 'https://mp.weixin.qq.com/cgi-bin/filepage?action=get_all_materials&query_type=2&begincount=0&count=1';
-  for (const url of [
-    `${fileBase}&token=${token}&lang=zh_CN&f=json&ajax=1&random=${Math.random()}`,
-    `${fileBase}&token=${token}&lang=zh_CN&random=${Math.random()}`,
-  ]) {
-    try {
-      const text = await fetchText(url);
-      let data = null;
-      try { data = JSON.parse(text); } catch (e) { /* HTML */ }
-      if (data) {
-        const item = data && data.data && data.data.file_item && data.data.file_item[0];
-        if (item && item.ticket_id) return item.ticket_id;
-        const ret = data.base_resp && data.base_resp.ret;
-        const msg = data.base_resp && data.base_resp.err_msg;
-        errors.push(`filepage ret=${ret}${msg ? '(' + msg + ')' : ''}`);
-      } else {
-        const m = text.match(/ticket_id["':=\s]{1,4}([A-Za-z0-9_\-]{6,})/);
-        if (m) return m[1];
-        if (!mpTicketDiag) mpTicketDiag = '[拦截页片段] ' + text.slice(0, 600);
-        errors.push(`filepage HTML(${text.length}字符,${pageTitle(text) || '无title'})`);
-      }
-    } catch (e) { errors.push('filepage:' + e.message); }
-  }
-
-  // 2) 图库 / 图文列表 / 新建图文页(编辑器相关页面内嵌 commonData.ticket_id)
-  for (const url of [
-    `https://mp.weixin.qq.com/cgi-bin/appmsgphoto?action=main&token=${token}&lang=zh_CN`,
-    `https://mp.weixin.qq.com/cgi-bin/appmsg?action=index&page=0&count=1&type=10&token=${token}&lang=zh_CN`,
-    `https://mp.weixin.qq.com/cgi-bin/operate_appmsg?action=main&type=10&token=${token}&lang=zh_CN`,
-  ]) {
-    const action = (url.match(/action=(\w+)/) || [])[1];
-    try {
-      const text = await fetchText(url);
-      const m = text.match(/ticket_id["':=\s]{1,4}([A-Za-z0-9_\-]{6,})/);
-      if (m) return m[1];
-      if (!mpTicketDiag) mpTicketDiag = '[拦截页片段] ' + text.slice(0, 600);
-      errors.push(`${action} 无ticket(${text.length}字符,${pageTitle(text) || '无title'})`);
-    } catch (e) { errors.push(action + ':' + e.message); }
-  }
-
-  throw new Error('获取上传票据失败[' + errors.join('; ') + ']');
 }
 
 /** 临时 Referer 伪装再抓图(防盗链),失败降级为直接抓 */
@@ -353,34 +329,46 @@ function extForType(type) {
   return m ? '.' + (m[1] === 'jpeg' ? 'jpg' : m[1]) : '.png';
 }
 
-/** 上传到公众号素材库(经页面中继同源上传),返回 {ok, url} 或 {ok:false, error, detail} */
-async function uploadToMaterial(token, ticketId, blob, filename) {
+/** 上传到公众号素材库(经页面中继同源上传),返回 {ok, url} 或 {ok:false, error, detail}
+ * 参考 wechatsync v2:ticket_id 参数填 user_name,ticket 参数填 commonData.ticket,
+ * svr_time 用主页返回的服务器时间,FormData 需带 5 个元数据字段。 */
+async function uploadToMaterial(meta, blob, filename) {
+  const seq = Date.now();
   const url = 'https://mp.weixin.qq.com/cgi-bin/filetransfer?action=upload_material&f=json&scene=8&writetype=doublewrite&groupid=1' +
-    `&ticket_id=${encodeURIComponent(ticketId)}&svr_time=${Math.floor(Date.now() / 1000)}&token=${token}&lang=zh_CN&seq=${Date.now()}`;
+    `&ticket_id=${encodeURIComponent(meta.userName)}&ticket=${encodeURIComponent(meta.ticket || '')}` +
+    `&svr_time=${meta.svrTime}&token=${meta.token}&lang=zh_CN&seq=${seq}&t=${Math.random()}`;
   const b64 = await blobToBase64(blob);
-  const text = await mpPageUpload(url, b64, blob.type || 'image/png', filename);
+  const text = await mpPageUpload(url, b64, blob.type || 'image/jpeg', filename);
   let data = null;
   try { data = JSON.parse(text); } catch (e) { /* 非 JSON */ }
   if (!data) return { ok: false, error: '上传接口返回了非 JSON 响应(可能登录态失效,请重新登录公众号)', detail: text.slice(0, 300) };
   const ret = data && data.base_resp && data.base_resp.ret;
-  if (ret !== 0) {
+  const errMsg = (data && data.base_resp && data.base_resp.err_msg) || '';
+  if (ret !== 0 || (errMsg && errMsg !== 'ok')) {
     const reason = ret === -3 ? '(登录态过期或 token 与账号不匹配,请重新登录)' : ret === 200013 ? '(频率限制,稍后再试)' : '';
-    return { ok: false, error: `上传被拒(ret=${ret})${reason}`, detail: text.slice(0, 300) };
+    return { ok: false, error: `上传被拒(ret=${ret}${errMsg ? ' ' + errMsg : ''})${reason}`, detail: text.slice(0, 300) };
   }
-  const cdn = data.content || (data.data && data.data.content);
+  const cdn = data.cdn_url || data.content || (data.data && data.data.content);
   if (!cdn) return { ok: false, error: '上传成功但未返回图片地址', detail: text.slice(0, 300) };
   return { ok: true, url: cdn };
 }
 
 /** 单账号完整采集链路 */
-async function uploadWithToken(token, srcUrl, pageUrl, homeHtml) {
+async function uploadWithAccount(acc, srcUrl, pageUrl) {
   try {
+    let meta = acc;
     const blob = await fetchImageBlob(srcUrl, pageUrl);
-    const ticketId = await getMpTicketId(token, homeHtml); // 失败会抛出含各来源真实错误码的详细异常
-    const r = await uploadToMaterial(token, ticketId, blob, 'mopai_' + Date.now() + extForType(blob.type));
+    // 元信息缺失(如旧缓存):经页面中继重新拉该账号主页解析
+    if (!meta.ticket || !meta.userName) {
+      const h = await mpPageFetchText(`https://mp.weixin.qq.com/cgi-bin/home?t=home&token=${meta.token}&lang=zh_CN`);
+      const m = parseMpHomeMeta(h);
+      if (!m) throw new Error('主页缺少 ticket/user_name 字段,页面结构可能已变化,请反馈');
+      meta = m;
+    }
+    const r = await uploadToMaterial(meta, blob, Date.now() + extForType(blob.type));
     return r;
   } catch (e) {
-    return { ok: false, error: e.message || '采集失败', detail: mpTicketDiag || '' };
+    return { ok: false, error: e.message || '采集失败', detail: '' };
   }
 }
 
@@ -419,10 +407,8 @@ async function handleCollectInfo() {
 }
 
 async function handleCollectUpload(msg) {
-  if (!msg.token || !msg.srcUrl) return { ok: false, error: '参数缺失' };
-  let homeHtml = '';
-  try { homeHtml = (await listMpAccounts()).html; } catch (e) { /* 票据来源降级 */ }
-  return uploadWithToken(msg.token, msg.srcUrl, msg.pageUrl, homeHtml);
+  if (!msg.account || !msg.account.token || !msg.srcUrl) return { ok: false, error: '参数缺失' };
+  return uploadWithAccount(msg.account, msg.srcUrl, msg.pageUrl);
 }
 
 // ---------------- 消息路由 ----------------
