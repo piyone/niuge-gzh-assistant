@@ -348,27 +348,30 @@ async function uploadWithAccount(acc, srcUrl, pageUrl) {
   }
 }
 
-/** 右键菜单:根菜单 + 「自动」子项 + 各账号子项(多号时二级菜单直选,免弹窗) */
+/** 右键二级菜单:有账号时直选账号上传;无账号时「检测账号并上传…」兜底 */
 const MP_COLLECT_ROOT = 'mopai-collect-root';
 const MP_COLLECT_AUTO = 'mopai-collect-auto';
 
-/** 重建右键菜单:根菜单 + 「自动」子项 + 每个已知账号一个子项(多号时二级菜单直选) */
+/** 重建右键菜单:有已知账号时只显示各账号子项;没有任何账号才显示「检测账号并上传…」兜底 */
 function rebuildCollectMenu(accounts) {
   try {
     chrome.contextMenus.removeAll(() => {
+      const list = (accounts || []).filter((a) => a && a.token);
       chrome.contextMenus.create({
         id: MP_COLLECT_ROOT,
         title: '采集图片到公众号素材库',
         contexts: ['image'],
       });
-      chrome.contextMenus.create({
-        id: MP_COLLECT_AUTO,
-        parentId: MP_COLLECT_ROOT,
-        title: accounts.length > 1 ? '检测账号并上传…' : '上传到我的公众号',
-        contexts: ['image'],
-      });
-      (accounts || []).forEach((acc, i) => {
-        if (!acc || !acc.token) return;
+      if (!list.length) {
+        chrome.contextMenus.create({
+          id: MP_COLLECT_AUTO,
+          parentId: MP_COLLECT_ROOT,
+          title: '检测账号并上传…',
+          contexts: ['image'],
+        });
+        return;
+      }
+      list.forEach((acc, i) => {
         chrome.contextMenus.create({
           id: MP_COLLECT_ROOT + '-' + i,
           parentId: MP_COLLECT_ROOT,
@@ -386,10 +389,10 @@ async function getAccountsCached(force) {
   if (!force && accCache.accounts.length && Date.now() - accCache.ts < 5 * 60000) return accCache.accounts;
   try {
     const { accounts } = await listMpAccounts();
-    accCache = { accounts, ts: Date.now() };
-    await chrome.storage.local.set({ mopai_mp_accounts: accounts });
-    rebuildCollectMenu(accounts);
-    return accounts;
+    accCache = { accounts: accounts.filter((a) => a && a.token), ts: Date.now() };
+    await chrome.storage.local.set({ mopai_mp_accounts: accCache.accounts });
+    rebuildCollectMenu(accCache.accounts);
+    return accCache.accounts;
   } catch (e) {
     if (!accCache.accounts.length) {
       try {
