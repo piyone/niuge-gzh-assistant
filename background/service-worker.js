@@ -124,18 +124,8 @@ async function handleAiTest(msg) {
 // 防盗链图:临时 DNR 会话规则把 Referer 伪装成图片所在页面。
 // 多账号:mp 后台支持同浏览器多号同时登录,主页 token 去重后 >1 个时弹出选择器窗口。
 
-const MP_UPLOAD_MENU = 'mopai-save-img';
-
 chrome.runtime.onInstalled.addListener(() => {
-  try {
-    chrome.contextMenus.removeAll(() => {
-      chrome.contextMenus.create({
-        id: MP_UPLOAD_MENU,
-        title: '采集图片到公众号素材库',
-        contexts: ['image'],
-      });
-    });
-  } catch (e) { /* ignore */ }
+  getAccountsCached(true).catch(() => { /* 安装/更新后立即建菜单 */ });
 });
 
 /** 系统通知(图标必须用扩展绝对 URL,SW 里相对路径会解析到 background/ 下导致下载失败) */
@@ -152,20 +142,6 @@ async function mpNotify(title, message) {
     console.error('[collect] notification failed:', e);
     return false;
   }
-}
-
-/** 通知失败时的兜底:弹一个错误选择器窗,保证失败原因可见 */
-function showCollectError(message) {
-  chrome.windows.create({
-    url: chrome.runtime.getURL('collector/collector.html') + '?err=' + encodeURIComponent(message),
-    type: 'popup', width: 440, height: 340,
-  }).catch(() => { /* ignore */ });
-}
-
-/** 通知或兜底窗口,二选一保证用户看得到结果 */
-async function notifyOrWindow(title, message) {
-  const ok = await mpNotify(title, message);
-  if (!ok) showCollectError(title + ' — ' + message);
 }
 
 /**
@@ -372,19 +348,165 @@ async function uploadWithAccount(acc, srcUrl, pageUrl) {
   }
 }
 
-/** 右键菜单入口:每次都弹选择窗(账号确认 + 过程可见),早期错误用通知兜底 */
-async function collectImage(info) {
-  const srcUrl = info.srcUrl;
-  if (!srcUrl) { await notifyOrWindow('采集失败', '未获取到图片地址'); return; }
-  const params = '?src=' + encodeURIComponent(srcUrl) + '&page=' + encodeURIComponent(info.pageUrl || '');
-  chrome.windows.create({
-    url: chrome.runtime.getURL('collector/collector.html') + params,
-    type: 'popup', width: 440, height: 660,
-  }).catch(() => { /* ignore */ });
+/** 右键菜单:根菜单 + 「自动」子项 + 各账号子项(多号时二级菜单直选,免弹窗) */
+const MP_COLLECT_ROOT = 'mopai-collect-root';
+const MP_COLLECT_AUTO = 'mopai-collect-auto';
+
+/** 重建右键菜单:根菜单 + 「自动」子项 + 每个已知账号一个子项(多号时二级菜单直选) */
+function rebuildCollectMenu(accounts) {
+  try {
+    chrome.contextMenus.removeAll(() => {
+      chrome.contextMenus.create({
+        id: MP_COLLECT_ROOT,
+        title: '采集图片到公众号素材库',
+        contexts: ['image'],
+      });
+      chrome.contextMenus.create({
+        id: MP_COLLECT_AUTO,
+        parentId: MP_COLLECT_ROOT,
+        title: accounts.length > 1 ? '检测账号并上传…' : '上传到我的公众号',
+        contexts: ['image'],
+      });
+      (accounts || []).forEach((acc, i) => {
+        if (!acc || !acc.token) return;
+        chrome.contextMenus.create({
+          id: MP_COLLECT_ROOT + '-' + i,
+          parentId: MP_COLLECT_ROOT,
+          title: `上传到「${acc.nick || '公众号'}」`,
+          contexts: ['image'],
+        });
+      });
+    });
+  } catch (e) { /* ignore */ }
 }
 
-chrome.contextMenus.onClicked.addListener((info) => {
-  if (info.menuItemId === MP_UPLOAD_MENU) collectImage(info);
+/** 账号缓存:SW 启动即拉一次(节流 5 分钟),菜单子项直接展示账号;选择账号后离线上传 */
+let accCache = { accounts: [], ts: 0 };
+async function getAccountsCached(force) {
+  if (!force && accCache.accounts.length && Date.now() - accCache.ts < 5 * 60000) return accCache.accounts;
+  try {
+    const { accounts } = await listMpAccounts();
+    accCache = { accounts, ts: Date.now() };
+    await chrome.storage.local.set({ mopai_mp_accounts: accounts });
+    rebuildCollectMenu(accounts);
+    return accounts;
+  } catch (e) {
+    if (!accCache.accounts.length) {
+      try {
+        const st = await chrome.storage.local.get('mopai_mp_accounts');
+        accCache.accounts = st.mopai_mp_accounts || [];
+      } catch (e2) { /* ignore */ }
+    }
+    accCache.ts = Date.now();
+    rebuildCollectMenu(accCache.accounts);
+    return accCache.accounts;
+  }
+}
+getAccountsCached().catch(() => { /* SW 唤醒即预热账号缓存与菜单 */ });
+
+/** 页面内进度提示:右侧悬浮卡片(spinner/成功/失败),完成后自动消失。
+ * 用 Web Animations API 做旋转(页面 CSP 禁 <style> 内联动画也不受影响)。 */
+function pageCollectToast(state, text, detail) {
+  const ID = '__mopai_collect_toast';
+  let box = document.getElementById(ID);
+  if (!box) {
+    box = document.createElement('div');
+    box.id = ID;
+    box.style.cssText = 'position:fixed;z-index:2147483647;right:20px;top:20px;background:#fff;border-radius:12px;box-shadow:0 6px 24px rgba(0,0,0,.18);padding:14px 18px;font:14px/1.5 -apple-system,BlinkMacSystemFont,"PingFang SC",sans-serif;color:#333;max-width:320px;display:flex;gap:12px;align-items:center;transition:opacity .35s;';
+    (document.body || document.documentElement).appendChild(box);
+  } else {
+    box.style.opacity = '1';
+    if (box._timer) { clearTimeout(box._timer); box._timer = null; }
+  }
+  box.textContent = '';
+  const icon = document.createElement('span');
+  icon.style.cssText = 'flex:none;width:20px;height:20px;display:flex;align-items:center;justify-content:center;';
+  box.appendChild(icon);
+  if (state === 'loading') {
+    const spin = document.createElement('span');
+    spin.style.cssText = 'width:18px;height:18px;border-radius:50%;border:2px solid #d1d5db;border-top-color:#07c160;display:block;';
+    spin.animate([{ transform: 'rotate(0deg)' }, { transform: 'rotate(360deg)' }], { duration: 800, iterations: Infinity });
+    icon.appendChild(spin);
+  } else {
+    icon.textContent = state === 'success' ? '✅' : '❌';
+    icon.style.fontSize = '17px';
+  }
+  const body = document.createElement('div');
+  body.style.cssText = 'min-width:0;';
+  const main = document.createElement('div');
+  main.style.cssText = 'font-weight:600;';
+  main.textContent = text;
+  body.appendChild(main);
+  if (detail) {
+    const sub = document.createElement('div');
+    sub.style.cssText = 'color:#9ca3af;font-size:12px;margin-top:3px;word-break:break-all;max-height:64px;overflow:hidden;';
+    sub.textContent = detail;
+    body.appendChild(sub);
+  }
+  box.appendChild(body);
+  if (state !== 'loading') {
+    box._timer = setTimeout(() => {
+      box.style.opacity = '0';
+      setTimeout(() => box.remove(), 400);
+    }, state === 'success' ? 2600 : 5000);
+  }
+}
+
+/** 在目标页面显示进度;注入失败(受限页面/无标签页)时返回 false 由系统通知兜底 */
+async function showCollectToast(tabId, state, text, detail) {
+  try {
+    if (!tabId) throw new Error('no tab');
+    await chrome.scripting.executeScript({ target: { tabId }, func: pageCollectToast, args: [state, text, detail || ''] });
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
+/** 执行一次采集:页面圆圈进度 → 上传 → 成功/失败提示后自动消失 */
+async function doCollect(acc, srcUrl, pageUrl, tabId) {
+  const name = acc.nick || '我的公众号';
+  const shown = await showCollectToast(tabId, 'loading', `正在采集到「${name}」素材库…`);
+  const r = await uploadWithAccount(acc, srcUrl, pageUrl);
+  if (r.ok) {
+    const ok = shown ? await showCollectToast(tabId, 'success', `已采集到「${name}」素材库`) : false;
+    if (!ok) await mpNotify('采集成功', `图片已上传到「${name}」素材库`);
+    getAccountsCached(true).catch(() => { /* 后台刷新缓存 */ });
+  } else {
+    const ok = shown ? await showCollectToast(tabId, 'error', '采集失败:' + r.error, r.detail) : false;
+    if (!ok) await mpNotify('采集失败', r.error);
+    getAccountsCached(true).catch(() => { /* 刷新账号,让下次菜单准确 */ });
+  }
+}
+
+chrome.contextMenus.onClicked.addListener((info, tab) => {
+  if (!String(info.menuItemId).startsWith(MP_COLLECT_ROOT) && info.menuItemId !== MP_COLLECT_AUTO) return;
+  const srcUrl = info.srcUrl;
+  const tabId = (tab && tab.id) || undefined;
+  if (!srcUrl) { mpNotify('采集失败', '未获取到图片地址'); return; }
+  if (info.menuItemId === MP_COLLECT_AUTO) {
+    (async () => {
+      try {
+        const accounts = await getAccountsCached(true);
+        if (accounts.length === 1) return void doCollect(accounts[0], srcUrl, info.pageUrl, tabId);
+        if (accounts.length > 1) {
+          // 多号且未点具体账号:打开选择窗兜底
+          const params = '?src=' + encodeURIComponent(srcUrl) + '&page=' + encodeURIComponent(info.pageUrl || '');
+          chrome.windows.create({ url: chrome.runtime.getURL('collector/collector.html') + params, type: 'popup', width: 440, height: 660 }).catch(() => { /* ignore */ });
+          return;
+        }
+        await mpNotify('未检测到公众号登录', '请先在浏览器登录 mp.weixin.qq.com 后重试');
+      } catch (e) {
+        await mpNotify('检测账号失败', e.message || '');
+      }
+    })();
+    return;
+  }
+  // 二级菜单里点的具体账号
+  const idx = Number(String(info.menuItemId).split('-').pop());
+  const acc = accCache.accounts[idx];
+  if (!acc) { mpNotify('账号信息过期', '请右键重试,或先用「检测账号并上传」刷新'); return; }
+  doCollect(acc, srcUrl, info.pageUrl, tabId);
 });
 
 // 选择器窗口的消息入口
