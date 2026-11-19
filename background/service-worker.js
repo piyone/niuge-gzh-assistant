@@ -172,26 +172,71 @@ async function notifyOrWindow(title, message) {
 async function listMpAccounts() {
   const resp = await fetchWithTimeout('https://mp.weixin.qq.com/', { credentials: 'include' }, 20000);
   const html = await resp.text();
-  const tokens = [...new Set((html.match(/token=(\d{3,})/g) || []).map((s) => s.slice(6)))];
+  const tokens = [...new Set([...html.matchAll(/(?<![a-zA-Z_])token=(\d{3,})/g)].map((m) => m[1]))];
   const nicks = [...html.matchAll(/nick_?name["']?\s*[:=]\s*["']([^"']{1,60})["']/g)].map((m) => m[1]);
   const avatars = [...html.matchAll(/head_?img["']?\s*[:=]\s*["']([^"']{6,})["']/g)].map((m) => m[1]);
   const accounts = tokens.map((token, i) => ({ token, nick: nicks[i] || '', avatar: avatars[i] || '' }));
   return { accounts, html, url: resp.url };
 }
 
-/** 从素材库列表接口取 ticket_id(与 wechatsync getTicketId 相同流程;兼容 JSON 与 HTML 两种响应) */
-async function getMpTicketId(token) {
-  const url = 'https://mp.weixin.qq.com/cgi-bin/filepage?action=get_all_materials&query_type=2&begincount=0&count=1' +
-    `&token=${token}&lang=zh_CN&f=json&ajax=1&random=${Math.random()}`;
-  const resp = await fetchWithTimeout(url, { credentials: 'include' }, 20000);
-  const text = await resp.text();
+/** mp 后台 cgi 请求统一带 Referer(部分接口校验来源),临时 DNR 会话规则 */
+async function withMpReferer(fn) {
+  let ruleId;
   try {
-    const data = JSON.parse(text);
-    const item = data && data.data && data.data.file_item && data.data.file_item[0];
-    if (item && item.ticket_id) return item.ticket_id;
-  } catch (e) { /* HTML 响应,走正则兜底 */ }
-  const m = text.match(/ticket_id["':=\s]{1,4}([A-Za-z0-9_%\-]{6,})/);
-  return m ? m[1] : null;
+    if (chrome.declarativeNetRequest) {
+      ruleId = 69000 + (Date.now() % 1000);
+      await chrome.declarativeNetRequest.updateSessionRules({
+        addRules: [{
+          id: ruleId,
+          priority: 1,
+          action: { type: 'modifyHeaders', requestHeaders: [{ header: 'Referer', operation: 'set', value: 'https://mp.weixin.qq.com/' }] },
+          condition: { regexFilter: '^https://mp\\.weixin\\.qq\\.com/', resourceTypes: ['xmlhttprequest'] },
+        }],
+      });
+    }
+    return await fn();
+  } finally {
+    if (ruleId !== undefined) {
+      try { await chrome.declarativeNetRequest.updateSessionRules({ removeRuleIds: [ruleId] }); } catch (e) { /* ignore */ }
+    }
+  }
+}
+
+/**
+ * 从素材库列表接口取 ticket_id(与 wechatsync getTicketId 同流程)。
+ * 两轮尝试:f=json 的 JSON 版 + 纯 HTML 版;失败时抛出含接口真实错误码的异常。
+ */
+async function getMpTicketId(token) {
+  const base = 'https://mp.weixin.qq.com/cgi-bin/filepage?action=get_all_materials&query_type=2&begincount=0&count=1';
+  const attempts = [
+    `${base}&token=${token}&lang=zh_CN&f=json&ajax=1&random=${Math.random()}`,
+    `${base}&token=${token}&lang=zh_CN&random=${Math.random()}`,
+  ];
+  const errors = [];
+  for (const url of attempts) {
+    let text = '';
+    try {
+      const resp = await withMpReferer(() => fetchWithTimeout(url, { credentials: 'include' }, 20000));
+      text = await resp.text();
+      let data = null;
+      try { data = JSON.parse(text); } catch (e) { /* HTML 响应 */ }
+      if (data) {
+        const item = data && data.data && data.data.file_item && data.data.file_item[0];
+        if (item && item.ticket_id) return item.ticket_id;
+        const ret = data.base_resp && data.base_resp.ret;
+        const msg = data.base_resp && data.base_resp.err_msg;
+        errors.push(`ret=${ret}${msg ? '(' + msg + ')' : ''}`);
+        if (data.data) errors.push('keys=' + Object.keys(data.data).join(','));
+      } else {
+        const m = text.match(/ticket_id["':=\s]{1,4}([A-Za-z0-9_\-]{6,})/);
+        if (m) return m[1];
+        errors.push(`非JSON(${text.length}字符)`);
+      }
+    } catch (e) {
+      errors.push(e.message);
+    }
+  }
+  throw new Error('获取上传票据失败[' + errors.join('; ') + ']');
 }
 
 /** 临时 Referer 伪装再抓图(防盗链),失败降级为直接抓 */
@@ -236,7 +281,7 @@ async function uploadToMaterial(token, ticketId, blob, filename) {
   form.append('file', blob, filename);
   const url = 'https://mp.weixin.qq.com/cgi-bin/filetransfer?action=upload_material&f=json&scene=8&writetype=doublewrite&groupid=1' +
     `&ticket_id=${encodeURIComponent(ticketId)}&svr_time=${Math.floor(Date.now() / 1000)}&token=${token}&lang=zh_CN&seq=${Date.now()}`;
-  const resp = await fetchWithTimeout(url, { method: 'POST', body: form, credentials: 'include' }, 60000);
+  const resp = await withMpReferer(() => fetchWithTimeout(url, { method: 'POST', body: form, credentials: 'include' }, 60000));
   const text = await resp.text();
   let data = null;
   try { data = JSON.parse(text); } catch (e) { /* 非 JSON */ }
@@ -255,8 +300,7 @@ async function uploadToMaterial(token, ticketId, blob, filename) {
 async function uploadWithToken(token, srcUrl, pageUrl) {
   try {
     const blob = await fetchImageBlob(srcUrl, pageUrl);
-    const ticketId = await getMpTicketId(token);
-    if (!ticketId) return { ok: false, error: '获取上传票据失败:素材库可能为空,请先在公众号后台上传过一张图片' };
+    const ticketId = await getMpTicketId(token); // 失败会抛出含接口错误码的详细异常
     const r = await uploadToMaterial(token, ticketId, blob, 'mopai_' + Date.now() + extForType(blob.type));
     return r;
   } catch (e) {
