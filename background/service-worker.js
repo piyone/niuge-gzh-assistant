@@ -203,39 +203,62 @@ async function withMpReferer(fn) {
 }
 
 /**
- * 从素材库列表接口取 ticket_id(与 wechatsync getTicketId 同流程)。
- * 两轮尝试:f=json 的 JSON 版 + 纯 HTML 版;失败时抛出含接口真实错误码的异常。
+ * 取上传票据 ticket_id。新版后台 filepage 接口可能返回 200009(not found),
+ * 因此按多来源尝试:主页内嵌 commonData → 素材库 JSON → 素材库 HTML →
+ * 图文列表页 → 新建图文页(编辑器页面一定带 ticket_id)。
+ * 全部失败时抛出含各来源真实错误码的异常。
  */
-async function getMpTicketId(token) {
-  const base = 'https://mp.weixin.qq.com/cgi-bin/filepage?action=get_all_materials&query_type=2&begincount=0&count=1';
-  const attempts = [
-    `${base}&token=${token}&lang=zh_CN&f=json&ajax=1&random=${Math.random()}`,
-    `${base}&token=${token}&lang=zh_CN&random=${Math.random()}`,
-  ];
+async function getMpTicketId(token, homeHtml) {
   const errors = [];
-  for (const url of attempts) {
-    let text = '';
+  // 0) 主页 HTML 里内嵌的 wx.commonData.ticket_id
+  const mHome = (homeHtml || '').match(/ticket_id["':=\s]{1,4}([A-Za-z0-9_\-]{6,})/);
+  if (mHome) return mHome[1];
+  errors.push('主页无ticket_id');
+
+  const fetchText = async (url) => {
+    const resp = await withMpReferer(() => fetchWithTimeout(url, { credentials: 'include' }, 20000));
+    return resp.text();
+  };
+  const pageTitle = (t) => ((t.match(/<title>([^<]{0,60})/) || [])[1] || '').trim();
+
+  // 1) 素材库列表:JSON 版 + HTML 版
+  const fileBase = 'https://mp.weixin.qq.com/cgi-bin/filepage?action=get_all_materials&query_type=2&begincount=0&count=1';
+  for (const url of [
+    `${fileBase}&token=${token}&lang=zh_CN&f=json&ajax=1&random=${Math.random()}`,
+    `${fileBase}&token=${token}&lang=zh_CN&random=${Math.random()}`,
+  ]) {
     try {
-      const resp = await withMpReferer(() => fetchWithTimeout(url, { credentials: 'include' }, 20000));
-      text = await resp.text();
+      const text = await fetchText(url);
       let data = null;
-      try { data = JSON.parse(text); } catch (e) { /* HTML 响应 */ }
+      try { data = JSON.parse(text); } catch (e) { /* HTML */ }
       if (data) {
         const item = data && data.data && data.data.file_item && data.data.file_item[0];
         if (item && item.ticket_id) return item.ticket_id;
         const ret = data.base_resp && data.base_resp.ret;
         const msg = data.base_resp && data.base_resp.err_msg;
-        errors.push(`ret=${ret}${msg ? '(' + msg + ')' : ''}`);
-        if (data.data) errors.push('keys=' + Object.keys(data.data).join(','));
+        errors.push(`filepage ret=${ret}${msg ? '(' + msg + ')' : ''}`);
       } else {
         const m = text.match(/ticket_id["':=\s]{1,4}([A-Za-z0-9_\-]{6,})/);
         if (m) return m[1];
-        errors.push(`非JSON(${text.length}字符)`);
+        errors.push(`filepage HTML(${text.length}字符,${pageTitle(text) || '无title'})`);
       }
-    } catch (e) {
-      errors.push(e.message);
-    }
+    } catch (e) { errors.push('filepage:' + e.message); }
   }
+
+  // 2) 图文列表页 / 新建图文页(编辑器页内嵌 commonData.ticket_id)
+  for (const url of [
+    `https://mp.weixin.qq.com/cgi-bin/appmsg?action=index&page=0&count=1&type=10&token=${token}&lang=zh_CN`,
+    `https://mp.weixin.qq.com/cgi-bin/operate_appmsg?action=main&type=10&token=${token}&lang=zh_CN`,
+  ]) {
+    const action = (url.match(/action=(\w+)/) || [])[1];
+    try {
+      const text = await fetchText(url);
+      const m = text.match(/ticket_id["':=\s]{1,4}([A-Za-z0-9_\-]{6,})/);
+      if (m) return m[1];
+      errors.push(`${action} 无ticket(${text.length}字符,${pageTitle(text) || '无title'})`);
+    } catch (e) { errors.push(action + ':' + e.message); }
+  }
+
   throw new Error('获取上传票据失败[' + errors.join('; ') + ']');
 }
 
@@ -297,10 +320,10 @@ async function uploadToMaterial(token, ticketId, blob, filename) {
 }
 
 /** 单账号完整采集链路 */
-async function uploadWithToken(token, srcUrl, pageUrl) {
+async function uploadWithToken(token, srcUrl, pageUrl, homeHtml) {
   try {
     const blob = await fetchImageBlob(srcUrl, pageUrl);
-    const ticketId = await getMpTicketId(token); // 失败会抛出含接口错误码的详细异常
+    const ticketId = await getMpTicketId(token, homeHtml); // 失败会抛出含各来源真实错误码的详细异常
     const r = await uploadToMaterial(token, ticketId, blob, 'mopai_' + Date.now() + extForType(blob.type));
     return r;
   } catch (e) {
@@ -344,7 +367,9 @@ async function handleCollectInfo() {
 
 async function handleCollectUpload(msg) {
   if (!msg.token || !msg.srcUrl) return { ok: false, error: '参数缺失' };
-  return uploadWithToken(msg.token, msg.srcUrl, msg.pageUrl);
+  let homeHtml = '';
+  try { homeHtml = (await listMpAccounts()).html; } catch (e) { /* 票据来源降级 */ }
+  return uploadWithToken(msg.token, msg.srcUrl, msg.pageUrl, homeHtml);
 }
 
 // ---------------- 消息路由 ----------------
