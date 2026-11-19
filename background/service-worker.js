@@ -176,7 +176,7 @@ async function listMpAccounts() {
   const nicks = [...html.matchAll(/nick_?name["']?\s*[:=]\s*["']([^"']{1,60})["']/g)].map((m) => m[1]);
   const avatars = [...html.matchAll(/head_?img["']?\s*[:=]\s*["']([^"']{6,})["']/g)].map((m) => m[1]);
   const accounts = tokens.map((token, i) => ({ token, nick: nicks[i] || '', avatar: avatars[i] || '' }));
-  return { accounts, htmlLen: html.length };
+  return { accounts, html, url: resp.url };
 }
 
 /** 从素材库列表接口取 ticket_id(与 wechatsync getTicketId 相同流程;兼容 JSON 与 HTML 两种响应) */
@@ -264,27 +264,15 @@ async function uploadWithToken(token, srcUrl, pageUrl) {
   }
 }
 
-/** 右键菜单入口:单账号直传,多账号弹选择器 */
+/** 右键菜单入口:每次都弹选择窗(账号确认 + 过程可见),早期错误用通知兜底 */
 async function collectImage(info) {
   const srcUrl = info.srcUrl;
   if (!srcUrl) { await notifyOrWindow('采集失败', '未获取到图片地址'); return; }
-  try {
-    const { accounts } = await listMpAccounts();
-    if (!accounts.length) { await notifyOrWindow('采集失败', '未检测到已登录的公众号,请先打开 mp.weixin.qq.com 登录'); return; }
-    if (accounts.length === 1) {
-      const r = await uploadWithToken(accounts[0].token, srcUrl, info.pageUrl);
-      await notifyOrWindow(r.ok ? '✅ 已采集到公众号素材库' : '采集失败', r.ok ? r.url : (r.error || '未知错误'));
-    } else {
-      // 多账号:打开选择器窗口,由用户指定上传到哪个账号
-      const params = '?src=' + encodeURIComponent(srcUrl) + '&page=' + encodeURIComponent(info.pageUrl || '');
-      chrome.windows.create({
-        url: chrome.runtime.getURL('collector/collector.html') + params,
-        type: 'popup', width: 440, height: 620,
-      });
-    }
-  } catch (e) {
-    await notifyOrWindow('采集失败', e.message || '未知错误');
-  }
+  const params = '?src=' + encodeURIComponent(srcUrl) + '&page=' + encodeURIComponent(info.pageUrl || '');
+  chrome.windows.create({
+    url: chrome.runtime.getURL('collector/collector.html') + params,
+    type: 'popup', width: 440, height: 660,
+  }).catch(() => { /* ignore */ });
 }
 
 chrome.contextMenus.onClicked.addListener((info) => {
@@ -294,8 +282,17 @@ chrome.contextMenus.onClicked.addListener((info) => {
 // 选择器窗口的消息入口
 async function handleCollectInfo() {
   try {
-    const { accounts } = await listMpAccounts();
-    return { ok: true, accounts };
+    const { accounts, html, url } = await listMpAccounts();
+    // 诊断信息:帮助定位"检测不到账号/上传失败"——含最终 URL、token 列表、页面内 token= 附近片段
+    const idx = html.indexOf('token=');
+    const diag = {
+      finalUrl: url,
+      htmlLen: html.length,
+      tokens: accounts.map((a) => a.token),
+      nicks: accounts.map((a) => a.nick),
+      snippet: idx >= 0 ? html.slice(Math.max(0, idx - 120), idx + 300) : '(页面中没有 token=)',
+    };
+    return { ok: true, accounts, diag };
   } catch (e) {
     return { ok: false, error: e.message || '检测登录态失败' };
   }

@@ -44,6 +44,7 @@
       renderError('后台无响应:' + e.message);
       return;
     }
+    if (info && info.diag) renderDiag(info.diag);
     if (!info || !info.ok) {
       renderError((info && info.error) || '检测登录态失败');
       return;
@@ -53,7 +54,7 @@
       renderError('未检测到已登录的公众号。请先在浏览器打开 mp.weixin.qq.com 登录,再重新检测。');
       return;
     }
-    setSection(accounts.length > 1 ? `检测到 ${accounts.length} 个已登录账号,点击选择要上传到的账号` : '检测到已登录账号');
+    setSection(accounts.length > 1 ? `检测到 ${accounts.length} 个已登录账号,点击选择要上传到的账号` : '检测到已登录账号,点击开始上传');
     accounts.forEach((acc, i) => {
       const row = document.createElement('div');
       row.className = 'acc';
@@ -66,6 +67,13 @@
       row.addEventListener('click', () => upload(acc, row));
       $('accList').appendChild(row);
     });
+  }
+
+  function renderDiag(diag) {
+    $('diag').textContent = JSON.stringify(diag, null, 2);
+    $('copyDiag').onclick = async () => {
+      try { await navigator.clipboard.writeText(JSON.stringify(diag, null, 2)); $('copyDiag').textContent = '已复制'; } catch (e) { /* ignore */ }
+    };
   }
 
   async function upload(acc, row) {
