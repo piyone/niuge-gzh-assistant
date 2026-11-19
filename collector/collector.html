@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>采集图片到公众号素材库</title>
+<style>
+  :root { --green: #07c160; --green-dark: #06ad56; --text: #1b1f27; --sub: #8890a0; --line: #e5e7eb; }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif;
+         background: #f6f7f9; color: var(--text); padding: 18px 16px; width: 440px; }
+  h1 { font-size: 16px; display: flex; align-items: center; gap: 8px; }
+  h1 .logo { width: 26px; height: 26px; border-radius: 7px; background: var(--green); color: #fff;
+             display: flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 700; }
+  .thumb { margin: 12px 0; padding: 8px; background: #fff; border: 1px solid var(--line); border-radius: 10px;
+           display: flex; gap: 10px; align-items: center; }
+  .thumb img { width: 44px; height: 44px; object-fit: cover; border-radius: 8px; background: #eee; }
+  .thumb .u { font-size: 11px; color: var(--sub); word-break: break-all; max-height: 44px; overflow: hidden; }
+  .section-t { font-size: 12px; color: var(--sub); margin: 14px 0 8px; }
+  .acc { background: #fff; border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px;
+         display: flex; align-items: center; gap: 12px; cursor: pointer; transition: all .15s; margin-bottom: 10px; }
+  .acc:hover { border-color: var(--green); box-shadow: 0 2px 10px rgba(7,193,96,.15); transform: translateY(-1px); }
+  .acc img { width: 40px; height: 40px; border-radius: 50%; background: #eee; object-fit: cover; }
+  .acc .ava-fallback { width: 40px; height: 40px; border-radius: 50%; background: var(--green); color: #fff;
+                       display: flex; align-items: center; justify-content: center; font-size: 16px; font-weight: 700; }
+  .acc .info { flex: 1; min-width: 0; }
+  .acc .name { font-size: 14px; font-weight: 600; }
+  .acc .token { font-size: 11px; color: var(--sub); margin-top: 2px; }
+  .acc .go { font-size: 12px; color: var(--green); font-weight: 600; }
+  .btn { display: block; width: 100%; padding: 11px 0; border: none; border-radius: 10px; background: var(--green);
+         color: #fff; font-size: 14px; font-weight: 600; cursor: pointer; margin-top: 6px; }
+  .btn:hover { background: var(--green-dark); }
+  .btn.ghost { background: #fff; color: var(--text); border: 1px solid var(--line); }
+  .status { margin-top: 14px; background: #fff; border: 1px solid var(--line); border-radius: 12px; padding: 14px; display: none; }
+  .status.show { display: block; }
+  .status .line { font-size: 13px; padding: 4px 0; display: flex; align-items: center; gap: 8px; }
+  .status .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--line); flex-shrink: 0; }
+  .status .line.doing .dot { background: var(--green); animation: pulse 1s infinite; }
+  .status .line.done .dot { background: var(--green); }
+  .status .line.err .dot { background: #e64340; }
+  @keyframes pulse { 50% { opacity: .3; } }
+  .spinner { width: 14px; height: 14px; border: 2px solid var(--line); border-top-color: var(--green);
+             border-radius: 50%; animation: spin .8s linear infinite; flex-shrink: 0; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .result { margin-top: 10px; font-size: 13px; word-break: break-all; }
+  .result.ok { color: var(--green-dark); }
+  .result.err { color: #e64340; }
+  .detail { margin-top: 8px; font-size: 11px; color: var(--sub); background: #f6f7f9; border-radius: 8px;
+            padding: 8px; max-height: 120px; overflow: auto; word-break: break-all; white-space: pre-wrap; }
+  .ok-actions { display: flex; gap: 8px; margin-top: 10px; }
+  .ok-actions .btn { margin-top: 0; }
+</style>
+</head>
+<body>
+  <h1><span class="logo">牛</span>采集图片到公众号素材库</h1>
+  <div class="thumb">
+    <img id="thumb" alt="">
+    <div class="u" id="thumbUrl"></div>
+  </div>
+  <div class="section-t" id="secTitle">检测已登录的公众号…</div>
+  <div id="accList"></div>
+  <button class="btn ghost" id="recheck">重新检测</button>
+  <div class="status" id="status">
+    <div class="line" id="step1"><span class="dot"></span><span>下载图片</span></div>
+    <div class="line" id="step2"><span class="dot"></span><span>获取上传票据</span></div>
+    <div class="line" id="step3"><span class="dot"></span><span>上传到素材库</span></div>
+    <div class="result" id="result"></div>
+    <div class="detail" id="detail" style="display:none"></div>
+    <div class="ok-actions" id="okActions" style="display:none">
+      <button class="btn" id="copyBtn" style="flex:1">复制图片地址</button>
+      <button class="btn ghost" id="libBtn" style="flex:1">打开素材库</button>
+    </div>
+  </div>
+  <script src="collector.js"></script>
+</body>
+</html>

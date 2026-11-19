@@ -122,6 +122,7 @@ async function handleAiTest(msg) {
 // 流程(与 wechatsync 微信适配器同款):主页拿 token → 素材列表拿 ticket_id →
 // POST filetransfer?action=upload_material 带 cookie 上传 → 返回 cdn_url。
 // 防盗链图:临时 DNR 会话规则把 Referer 伪装成图片所在页面。
+// 多账号:mp 后台支持同浏览器多号同时登录,主页 token 去重后 >1 个时弹出选择器窗口。
 
 const MP_UPLOAD_MENU = 'mopai-save-img';
 
@@ -148,22 +149,30 @@ function mpNotify(title, message) {
   } catch (e) { /* ignore */ }
 }
 
-/** 公众号后台登录态与 token(未登录时页面没有 token 链接) */
-async function getMpAuth() {
+/** 抓主页,提取全部已登录账号(mp 多号登录会在页面里留多个 token) */
+async function listMpAccounts() {
   const resp = await fetchWithTimeout('https://mp.weixin.qq.com/', { credentials: 'include' }, 20000);
   const html = await resp.text();
-  const token = (html.match(/token=(\d{2,})/) || [])[1];
-  return token ? { token } : null;
+  const tokens = [...new Set((html.match(/token=(\d{3,})/g) || []).map((s) => s.slice(6)))];
+  const nicks = [...html.matchAll(/nick_?name["']?\s*[:=]\s*["']([^"']{1,60})["']/g)].map((m) => m[1]);
+  const avatars = [...html.matchAll(/head_?img["']?\s*[:=]\s*["']([^"']{6,})["']/g)].map((m) => m[1]);
+  const accounts = tokens.map((token, i) => ({ token, nick: nicks[i] || '', avatar: avatars[i] || '' }));
+  return { accounts, htmlLen: html.length };
 }
 
-/** 从素材库列表接口取 ticket_id(与 wechatsync getTicketId 相同流程) */
+/** 从素材库列表接口取 ticket_id(与 wechatsync getTicketId 相同流程;兼容 JSON 与 HTML 两种响应) */
 async function getMpTicketId(token) {
   const url = 'https://mp.weixin.qq.com/cgi-bin/filepage?action=get_all_materials&query_type=2&begincount=0&count=1' +
     `&token=${token}&lang=zh_CN&f=json&ajax=1&random=${Math.random()}`;
   const resp = await fetchWithTimeout(url, { credentials: 'include' }, 20000);
-  const data = await resp.json();
-  const item = data && data.data && data.data.file_item && data.data.file_item[0];
-  return (item && item.ticket_id) || null;
+  const text = await resp.text();
+  try {
+    const data = JSON.parse(text);
+    const item = data && data.data && data.data.file_item && data.data.file_item[0];
+    if (item && item.ticket_id) return item.ticket_id;
+  } catch (e) { /* HTML 响应,走正则兜底 */ }
+  const m = text.match(/ticket_id["':=\s]{1,4}([A-Za-z0-9_%\-]{6,})/);
+  return m ? m[1] : null;
 }
 
 /** 临时 Referer 伪装再抓图(防盗链),失败降级为直接抓 */
@@ -202,34 +211,58 @@ function extForType(type) {
   return m ? '.' + (m[1] === 'jpeg' ? 'jpg' : m[1]) : '.png';
 }
 
-/** 上传到公众号素材库,返回 cdn_url */
+/** 上传到公众号素材库,返回 {ok, url} 或 {ok:false, error, detail} */
 async function uploadToMaterial(token, ticketId, blob, filename) {
   const form = new FormData();
   form.append('file', blob, filename);
   const url = 'https://mp.weixin.qq.com/cgi-bin/filetransfer?action=upload_material&f=json&scene=8&writetype=doublewrite&groupid=1' +
     `&ticket_id=${encodeURIComponent(ticketId)}&svr_time=${Math.floor(Date.now() / 1000)}&token=${token}&lang=zh_CN&seq=${Date.now()}`;
   const resp = await fetchWithTimeout(url, { method: 'POST', body: form, credentials: 'include' }, 60000);
-  const data = await resp.json();
+  const text = await resp.text();
+  let data = null;
+  try { data = JSON.parse(text); } catch (e) { /* 非 JSON */ }
+  if (!data) return { ok: false, error: '上传接口返回了非 JSON 响应(可能登录态失效,请重新登录公众号)', detail: text.slice(0, 300) };
   const ret = data && data.base_resp && data.base_resp.ret;
   if (ret !== 0) {
-    const reason = ret === -3 ? '(登录态过期,请重新登录公众号)' : ret === 200013 ? '(频率限制,稍后再试)' : '';
-    throw new Error(`上传被拒(ret=${ret})${reason}`);
+    const reason = ret === -3 ? '(登录态过期或 token 与账号不匹配,请重新登录)' : ret === 200013 ? '(频率限制,稍后再试)' : '';
+    return { ok: false, error: `上传被拒(ret=${ret})${reason}`, detail: text.slice(0, 300) };
   }
-  if (!data.content) throw new Error('上传成功但未返回图片地址');
-  return data.content;
+  const cdn = data.content || (data.data && data.data.content);
+  if (!cdn) return { ok: false, error: '上传成功但未返回图片地址', detail: text.slice(0, 300) };
+  return { ok: true, url: cdn };
 }
 
+/** 单账号完整采集链路 */
+async function uploadWithToken(token, srcUrl, pageUrl) {
+  try {
+    const blob = await fetchImageBlob(srcUrl, pageUrl);
+    const ticketId = await getMpTicketId(token);
+    if (!ticketId) return { ok: false, error: '获取上传票据失败:素材库可能为空,请先在公众号后台上传过一张图片' };
+    const r = await uploadToMaterial(token, ticketId, blob, 'mopai_' + Date.now() + extForType(blob.type));
+    return r;
+  } catch (e) {
+    return { ok: false, error: e.message || '采集失败', detail: '' };
+  }
+}
+
+/** 右键菜单入口:单账号直传,多账号弹选择器 */
 async function collectImage(info) {
   const srcUrl = info.srcUrl;
   if (!srcUrl) { mpNotify('采集失败', '未获取到图片地址'); return; }
   try {
-    const auth = await getMpAuth();
-    if (!auth) { mpNotify('采集失败', '未登录公众号后台,请先打开 mp.weixin.qq.com 登录一次'); return; }
-    const blob = await fetchImageBlob(srcUrl, info.pageUrl);
-    const ticketId = await getMpTicketId(auth.token);
-    if (!ticketId) { mpNotify('采集失败', '获取上传票据失败:请先在公众号后台打开一次「素材库」页面再试'); return; }
-    const cdn = await uploadToMaterial(auth.token, ticketId, blob, 'mopai_' + Date.now() + extForType(blob.type));
-    mpNotify('✅ 已采集到公众号素材库', cdn);
+    const { accounts } = await listMpAccounts();
+    if (!accounts.length) { mpNotify('采集失败', '未检测到已登录的公众号,请先打开 mp.weixin.qq.com 登录'); return; }
+    if (accounts.length === 1) {
+      const r = await uploadWithToken(accounts[0].token, srcUrl, info.pageUrl);
+      mpNotify(r.ok ? '✅ 已采集到公众号素材库' : '采集失败', r.ok ? r.url : (r.error || '未知错误'));
+    } else {
+      // 多账号:打开选择器窗口,由用户指定上传到哪个账号
+      const params = '?src=' + encodeURIComponent(srcUrl) + '&page=' + encodeURIComponent(info.pageUrl || '');
+      chrome.windows.create({
+        url: chrome.runtime.getURL('collector/collector.html') + params,
+        type: 'popup', width: 440, height: 620,
+      });
+    }
   } catch (e) {
     mpNotify('采集失败', e.message || '未知错误');
   }
@@ -238,6 +271,21 @@ async function collectImage(info) {
 chrome.contextMenus.onClicked.addListener((info) => {
   if (info.menuItemId === MP_UPLOAD_MENU) collectImage(info);
 });
+
+// 选择器窗口的消息入口
+async function handleCollectInfo() {
+  try {
+    const { accounts } = await listMpAccounts();
+    return { ok: true, accounts };
+  } catch (e) {
+    return { ok: false, error: e.message || '检测登录态失败' };
+  }
+}
+
+async function handleCollectUpload(msg) {
+  if (!msg.token || !msg.srcUrl) return { ok: false, error: '参数缺失' };
+  return uploadWithToken(msg.token, msg.srcUrl, msg.pageUrl);
+}
 
 // ---------------- 消息路由 ----------------
 
@@ -257,6 +305,12 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           break;
         case 'mopai-ai-test':
           sendResponse(await handleAiTest(msg));
+          break;
+        case 'mopai-collect-info':
+          sendResponse(await handleCollectInfo());
+          break;
+        case 'mopai-collect-upload':
+          sendResponse(await handleCollectUpload(msg));
           break;
         case 'mopai-sync-auth': {
           const pl = globalThis.MoPaiPlatforms.get(msg.platform);
