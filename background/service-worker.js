@@ -138,15 +138,34 @@ chrome.runtime.onInstalled.addListener(() => {
   } catch (e) { /* ignore */ }
 });
 
-function mpNotify(title, message) {
+/** 系统通知(图标必须用扩展绝对 URL,SW 里相对路径会解析到 background/ 下导致下载失败) */
+async function mpNotify(title, message) {
   try {
-    chrome.notifications.create({
+    await chrome.notifications.create({
       type: 'basic',
-      iconUrl: 'icons/icon128.png',
+      iconUrl: chrome.runtime.getURL('icons/icon128.png'),
       title,
       message: String(message || '').slice(0, 200),
     });
-  } catch (e) { /* ignore */ }
+    return true;
+  } catch (e) {
+    console.error('[collect] notification failed:', e);
+    return false;
+  }
+}
+
+/** 通知失败时的兜底:弹一个错误选择器窗,保证失败原因可见 */
+function showCollectError(message) {
+  chrome.windows.create({
+    url: chrome.runtime.getURL('collector/collector.html') + '?err=' + encodeURIComponent(message),
+    type: 'popup', width: 440, height: 340,
+  }).catch(() => { /* ignore */ });
+}
+
+/** 通知或兜底窗口,二选一保证用户看得到结果 */
+async function notifyOrWindow(title, message) {
+  const ok = await mpNotify(title, message);
+  if (!ok) showCollectError(title + ' — ' + message);
 }
 
 /** 抓主页,提取全部已登录账号(mp 多号登录会在页面里留多个 token) */
@@ -248,13 +267,13 @@ async function uploadWithToken(token, srcUrl, pageUrl) {
 /** 右键菜单入口:单账号直传,多账号弹选择器 */
 async function collectImage(info) {
   const srcUrl = info.srcUrl;
-  if (!srcUrl) { mpNotify('采集失败', '未获取到图片地址'); return; }
+  if (!srcUrl) { await notifyOrWindow('采集失败', '未获取到图片地址'); return; }
   try {
     const { accounts } = await listMpAccounts();
-    if (!accounts.length) { mpNotify('采集失败', '未检测到已登录的公众号,请先打开 mp.weixin.qq.com 登录'); return; }
+    if (!accounts.length) { await notifyOrWindow('采集失败', '未检测到已登录的公众号,请先打开 mp.weixin.qq.com 登录'); return; }
     if (accounts.length === 1) {
       const r = await uploadWithToken(accounts[0].token, srcUrl, info.pageUrl);
-      mpNotify(r.ok ? '✅ 已采集到公众号素材库' : '采集失败', r.ok ? r.url : (r.error || '未知错误'));
+      await notifyOrWindow(r.ok ? '✅ 已采集到公众号素材库' : '采集失败', r.ok ? r.url : (r.error || '未知错误'));
     } else {
       // 多账号:打开选择器窗口,由用户指定上传到哪个账号
       const params = '?src=' + encodeURIComponent(srcUrl) + '&page=' + encodeURIComponent(info.pageUrl || '');
@@ -264,7 +283,7 @@ async function collectImage(info) {
       });
     }
   } catch (e) {
-    mpNotify('采集失败', e.message || '未知错误');
+    await notifyOrWindow('采集失败', e.message || '未知错误');
   }
 }
 

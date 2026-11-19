@@ -3,6 +3,7 @@
   const q = new URLSearchParams(location.search);
   const SRC = q.get('src') || '';
   const PAGE = q.get('page') || '';
+  const ERR = q.get('err') || '';
 
   const $ = (id) => document.getElementById(id);
   let currentToken = null;
@@ -109,5 +110,6 @@
   }
 
   $('recheck').addEventListener('click', detect);
+  if (ERR) { renderError(ERR); return; } // 通知失败时的兜底错误窗
   detect();
 })();
