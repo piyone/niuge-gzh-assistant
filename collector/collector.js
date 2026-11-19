@@ -59,11 +59,30 @@
       const row = document.createElement('div');
       row.className = 'acc';
       const name = acc.nick || `账号 ${i + 1}`;
-      const ava = acc.avatar
-        ? `<img src="${escapeHtml(acc.avatar)}" onerror="this.outerHTML='<div class=&quot;ava-fallback&quot;>牛</div>'">`
-        : `<div class="ava-fallback">${escapeHtml(name.slice(0, 1))}</div>`;
-      row.innerHTML = `${ava}<div class="info"><div class="name">${escapeHtml(name)}</div>
-        <div class="token">token …${escapeHtml(acc.token.slice(-6))}</div></div><div class="go">上传 →</div>`;
+      // 头像用 DOM API 构建:CSP 禁止 innerHTML 里的内联 onerror 事件属性
+      const fallback = () => {
+        const fb = document.createElement('div');
+        fb.className = 'ava-fallback';
+        fb.textContent = name.slice(0, 1);
+        return fb;
+      };
+      if (acc.avatar) {
+        const img = document.createElement('img');
+        img.src = acc.avatar;
+        img.addEventListener('error', () => img.replaceWith(fallback()));
+        row.appendChild(img);
+      } else {
+        row.appendChild(fallback());
+      }
+      const info = document.createElement('div');
+      info.className = 'info';
+      info.innerHTML = `<div class="name">${escapeHtml(name)}</div>
+        <div class="token">token …${escapeHtml(acc.token.slice(-6))}</div>`;
+      const go = document.createElement('div');
+      go.className = 'go';
+      go.textContent = '上传 →';
+      row.appendChild(info);
+      row.appendChild(go);
       row.addEventListener('click', () => upload(acc, row));
       $('accList').appendChild(row);
     });
