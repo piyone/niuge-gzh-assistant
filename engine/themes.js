@@ -108,7 +108,7 @@ window.MoPaiThemes = (() => {
     const lh = o.lineHeight || 1.8;
     const ls = typeof o.letterSpacing === 'number' ? o.letterSpacing : 0.5; // 正文字间距(px)
     const imgRadius = typeof o.imgRadius === 'number' ? o.imgRadius : 4; // 图片圆角,0 = 直角
-    const pGap = Math.round(fs * (lh - 0.55)); // 段间距随字号行距联动
+    const pGap = o.paraGap > 0 ? o.paraGap : Math.round(fs * (lh - 0.55)); // 段落间距:0 = 随字号行距联动
     const flavor = o.flavor || 'bar-h2';
     const v = vars;
     const map = {};

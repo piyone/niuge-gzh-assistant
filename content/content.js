@@ -53,6 +53,7 @@ await mopai.inject(article.html); // 直接注入公众号编辑器
     lineHeight: 1.75, // 对齐微信编辑器默认行距
     letterSpacing: 0.5, // 正文字间距(px),0 = 紧凑
     imgRadius: 4, // 图片圆角(px),0 = 直角
+    paraGap: 0, // 段落间距(px),0 = 自动(随字号行距联动)
     sidePad: 0, // 正文两侧边距(px),0 = 不加留白
     rules: { pad: true, punct: true, blank: true, footnote: true, ellipsis: true, collapse: false },
     customWords: [],
@@ -122,7 +123,7 @@ await mopai.inject(article.html); // 直接注入公众号编辑器
 
   /** 主题相关覆盖项(预览 / 套主题共用) */
   function fmtThemeOverrides() {
-    return { fontSize: settings.fontSize, lineHeight: settings.lineHeight, letterSpacing: settings.letterSpacing, imgRadius: settings.imgRadius, sidePad: settings.sidePad };
+    return { fontSize: settings.fontSize, lineHeight: settings.lineHeight, letterSpacing: settings.letterSpacing, imgRadius: settings.imgRadius, paraGap: settings.paraGap, sidePad: settings.sidePad };
   }
 
   // ---------------- 编辑器定位与注入 ----------------
@@ -927,7 +928,7 @@ await mopai.inject(article.html); // 直接注入公众号编辑器
       if (!md) { preview.innerHTML = ''; report.textContent = '输入 Markdown 后自动渲染预览'; lastMdHtml = ''; return; }
       try {
         const r = window.MoPaiRender.renderMarkdown(md, settings.theme, {
-          fontSize: settings.fontSize, lineHeight: settings.lineHeight, letterSpacing: settings.letterSpacing, imgRadius: settings.imgRadius, sidePad: settings.sidePad,
+          fontSize: settings.fontSize, lineHeight: settings.lineHeight, letterSpacing: settings.letterSpacing, imgRadius: settings.imgRadius, paraGap: settings.paraGap, sidePad: settings.sidePad,
           padSpaces: settings.rules.pad, punct: settings.rules.punct,
           blank: settings.rules.blank, footnote: settings.rules.footnote,
           ellipsis: settings.rules.ellipsis !== false, collapse: settings.rules.collapse === true,
@@ -1027,6 +1028,8 @@ await mopai.inject(article.html); // 直接注入公众号编辑器
         <input type="range" id="mopai-ir" min="0" max="16" step="1" value="${settings.imgRadius}"></div>
       <div class="mopai-slider-row"><label>两侧边距 <b id="mopai-sp-val">${settings.sidePad}</b>px</label>
         <input type="range" id="mopai-sp" min="0" max="32" step="2" value="${settings.sidePad}"></div>
+      <div class="mopai-slider-row"><label>段落间距 <b id="mopai-pg-val">${settings.paraGap ? settings.paraGap + 'px' : '自动'}</b></label>
+        <input type="range" id="mopai-pg" min="0" max="40" step="2" value="${settings.paraGap || 0}"></div>
       <div class="mopai-row">
         <button class="mopai-btn primary" data-act="apply-theme">✅ 套用主题到编辑器</button>
         <button class="mopai-btn ghost" data-act="toggle-preview">📱 预览 开/关</button>
@@ -1189,6 +1192,11 @@ await mopai.inject(article.html); // 直接注入公众号编辑器
       p.querySelector('#mopai-sp-val').textContent = e.target.value;
       await saveSettings(); refreshPreview();
     });
+    p.querySelector('#mopai-pg').addEventListener('input', async (e) => {
+      settings.paraGap = +e.target.value;
+      p.querySelector('#mopai-pg-val').textContent = settings.paraGap ? settings.paraGap + 'px' : '自动';
+      await saveSettings(); refreshPreview();
+    });
 
     // 自定义主题:颜色实时预览(input),收起取色器时持久化(change)
     const CUSTOM_KEYS = ['primary', 'strong', 'text', 'secondary', 'blockBg', 'blockBar', 'link', 'border'];
@@ -1270,7 +1278,11 @@ await mopai.inject(article.html); // 直接注入公众号编辑器
   function getEditorTextForAI() {
     const src = getEditorRoot();
     if (!src) return '';
-    return (src.innerText || src.textContent || '').replace(/\u00a0/g, ' ').trim();
+    // 行级归一:innerText 的每个换行(块级元素边界与 <br>)都视为段落边界。
+    // ProseMirror 常用嵌套 section/<br> 分段,任何依赖 DOM 结构的提取都可能整篇粘连,
+    // 导致 AI 校对分块失灵(只有 1 块 → 模型只查开头)。
+    const raw = (src.innerText || src.textContent || '').replace(/\u00a0/g, ' ');
+    return raw.split(/\n+/).map((s) => s.trim()).filter(Boolean).join('\n\n');
   }
 
   /** 带限流自动重试的单次 AI 调用(标题/摘要用) */
@@ -1360,17 +1372,22 @@ await mopai.inject(article.html); // 直接注入公众号编辑器
       if (text.length < 10) return toast('正文太短,无需校对', 'err');
 
       const chunks = window.MoPaiAI.chunkArticle(text);
+      console.log('[牛哥] AI校对:全文', text.length, '字,分', chunks.length, '批,各批字数', chunks.map((c) => c.length).join('/'));
       issues = [];
       prog.hidden = false;
       stopBtn.hidden = false;
-      summary.hidden = true;
+      // 诊断信息常驻:全文量与分块数一眼可见(分块=1 说明提取异常,分块>1 逐块推进)
+      summary.hidden = false;
+      summary.innerHTML = `📄 全文 ${text.length} 字${chunks.length > 1 ? ` · 分 ${chunks.length} 批校对` : ''}`;
       list.innerHTML = '';
       let cancelled = false;
       stopBtn.onclick = () => { cancelled = true; stopBtn.hidden = true; statusEl.textContent = '已停止'; };
 
       for (let ci = 0; ci < chunks.length; ci++) {
         bar.style.width = Math.round((ci / chunks.length) * 100) + '%';
-        statusEl.textContent = `校对第 ${ci + 1}/${chunks.length} 段…`;
+        statusEl.textContent = chunks.length > 1
+          ? `AI 正在逐批校对全文(${ci + 1}/${chunks.length})…`
+          : 'AI 正在逐字校对全文…';
 
         let attempt = 0, res = null;
         while (attempt < 3) {
@@ -1387,7 +1404,7 @@ await mopai.inject(article.html); // 直接注入公众号编辑器
         if (!res.ok) {
           statusEl.textContent = '出错';
           stopBtn.hidden = true;
-          list.innerHTML = `<div class="mopai-ai-item err">❌ ${esc(res.error || '未知错误')}${chunks.length > 1 ? '(已完成的段落结果保留)' : ''}</div>`;
+          list.innerHTML = `<div class="mopai-ai-item err">❌ ${esc(res.error || '未知错误')}${chunks.length > 1 ? '(已完成批次的结果保留)' : ''}</div>`;
           return;
         }
         const parsed = window.MoPaiAI.parseAiResponse(res.raw);
@@ -1410,7 +1427,7 @@ await mopai.inject(article.html); // 直接注入公众号编辑器
       stopBtn.hidden = true;
       setTimeout(() => { prog.hidden = true; }, 1500);
       summary.hidden = false;
-      summary.innerHTML = `共 ${chunks.length} 段 · 发现 <b>${issues.length}</b> 处问题`;
+      summary.innerHTML = `✅ 校对完成${chunks.length > 1 ? `(${chunks.length} 批)` : ''} · 发现 <b>${issues.length}</b> 处问题`;
       renderIssues();
     };
 

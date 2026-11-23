@@ -52,6 +52,7 @@ window.MoPaiRender = (() => {
       lineHeight: (overrides && overrides.lineHeight) || 1.8,
       letterSpacing: typeof (overrides && overrides.letterSpacing) === 'number' ? overrides.letterSpacing : 0.5,
       imgRadius: typeof (overrides && overrides.imgRadius) === 'number' ? overrides.imgRadius : 4,
+      paraGap: typeof (overrides && overrides.paraGap) === 'number' ? overrides.paraGap : 0,
       flavor: theme.flavor,
     };
     const styleMap = window.MoPaiThemes.makeStyleMap(vars, styleOpts);
@@ -169,6 +170,7 @@ window.MoPaiRender = (() => {
       lineHeight: (overrides && overrides.lineHeight) || 1.8,
       letterSpacing: typeof (overrides && overrides.letterSpacing) === 'number' ? overrides.letterSpacing : 0.5,
       imgRadius: typeof (overrides && overrides.imgRadius) === 'number' ? overrides.imgRadius : 4,
+      paraGap: typeof (overrides && overrides.paraGap) === 'number' ? overrides.paraGap : 0,
       flavor: theme.flavor,
     });
     window.MoPaiThemes._currentTokens = window.MoPaiThemes.tokensFor(theme.vars);

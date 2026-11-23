@@ -1,10 +1,9 @@
 /**
  * 牛哥公众号助手 · AI 校对引擎(纯函数,无 chrome 依赖)
  * 分块、提示词构建、响应解析、错误应用。
- * 平台限制:每密钥 60 秒 1 次请求、请求体 ≤16KB、max_tokens ≤1024 → 分块 ≤3200 字,每块最多 10 条问题。
- */
+ * 平台限制:请求体 ≤16KB、max_tokens ≤1024 → 分块 ≤1600 字(粒度小,模型才能覆盖全文,每块最多 12 条问题)。 */
 globalThis.MoPaiAI = (() => {
-  const CHUNK_LIMIT = 3200;
+  const CHUNK_LIMIT = 1600;
 
   /** 按段落分块:每块 ≤ CHUNK_LIMIT 字,优先在段落边界切分 */
   function chunkArticle(text, limit) {
