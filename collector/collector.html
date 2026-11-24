@@ -9,8 +9,7 @@
   body { font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif;
          background: #f6f7f9; color: var(--text); padding: 18px 16px; width: 440px; }
   h1 { font-size: 16px; display: flex; align-items: center; gap: 8px; }
-  h1 .logo { width: 26px; height: 26px; border-radius: 7px; background: var(--green); color: #fff;
-             display: flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 700; }
+  h1 .logo { width: 26px; height: 26px; border-radius: 7px; display: block; object-fit: contain; }
   .thumb { margin: 12px 0; padding: 8px; background: #fff; border: 1px solid var(--line); border-radius: 10px;
            display: flex; gap: 10px; align-items: center; }
   .thumb img { width: 44px; height: 44px; object-fit: cover; border-radius: 8px; background: #eee; }
@@ -51,7 +50,7 @@
 </style>
 </head>
 <body>
-  <h1><span class="logo">牛</span>采集图片到公众号素材库</h1>
+  <h1><img class="logo" src="../icons/icon48-v6.png" alt="">采集图片到公众号素材库</h1>
   <div class="thumb">
     <img id="thumb" alt="">
     <div class="u" id="thumbUrl"></div>

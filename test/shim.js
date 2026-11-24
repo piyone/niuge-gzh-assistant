@@ -24,7 +24,23 @@
       local: fakeArea(localStore, 'local'),
       onChanged: { addListener: (fn) => changeListeners.push(fn) },
     },
-    runtime: { getURL: (p) => p },
+    runtime: { getURL: (p) => new URL('../' + p, window.location.href).href },
   };
+  if (!window.DataTransfer) {
+    window.DataTransfer = class {
+      constructor() { this.data = {}; }
+      setData(type, value) { this.data[type] = String(value); }
+      getData(type) { return this.data[type] || ''; }
+      clearData(type) { if (type) delete this.data[type]; else this.data = {}; }
+    };
+  }
+  if (!window.ClipboardEvent) {
+    window.ClipboardEvent = class extends Event {
+      constructor(type, options = {}) {
+        super(type, options);
+        this.clipboardData = options.clipboardData || null;
+      }
+    };
+  }
   console.log('[mopai-test] chrome shim ready');
 })();

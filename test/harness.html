@@ -3,17 +3,18 @@
 <head>
 <meta charset="utf-8">
 <title>牛哥 MoPai · 测试台</title>
+<link rel="stylesheet" href="../content/panel.css">
 <style>
   body { font-family: "PingFang SC","Microsoft YaHei",sans-serif; margin: 0; display: flex; height: 100vh; }
-  #fake-mp { flex: 1; padding: 24px; background: #eceef1; overflow-y: auto; }
+  #fake-mp { flex: 1; min-width: 0; padding: 24px; background: #eceef1; overflow-y: auto; }
   #fake-mp h3 { margin: 0 0 12px; color: #333; }
   #fake-editor {
-    background: #fff; min-height: 380px; border-radius: 6px; padding: 24px;
+    background: #fff; box-sizing: border-box; width: 100%; min-height: 380px; border-radius: 6px; padding: 24px;
     outline: none; line-height: 1.9; font-size: 15px;
     box-shadow: 0 2px 8px rgba(0,0,0,.08);
   }
   .weui-bar { background: #353535; color: #fff; padding: 10px 24px; font-size: 14px; }
-  #log { width: 420px; border-left: 1px solid #ddd; padding: 16px; overflow-y: auto; background: #fff; }
+  #log { width: 40%; max-width: 420px; border-left: 1px solid #ddd; padding: 16px; overflow-y: auto; background: #fff; }
   #log h4 { margin: 8px 0; }
   #log pre { background: #f6f8fa; padding: 10px; border-radius: 6px; font-size: 11px; overflow-x: auto; white-space: pre-wrap; }
   .case { border: 1px solid #eee; border-radius: 8px; padding: 12px; margin-bottom: 14px; }
@@ -23,6 +24,16 @@
 <body>
   <div id="fake-mp">
     <div class="weui-bar">模拟 · 微信公众平台 / 图文编辑页</div>
+    <div id="fake-wechat-actions" style="display:flex;gap:6px;align-items:center;width:100%;white-space:nowrap;overflow-x:auto;background:#fff;padding:8px 0;">
+      <span style="flex:0 0 auto;width:24px;height:24px"><svg viewBox="0 0 24 24" width="24" height="24"><path d="M9 7 4 12l5 5M15 7l5 5-5 5"/></svg></span>
+      <span style="flex:0 0 auto;width:24px;height:24px"><svg viewBox="0 0 24 24" width="24" height="24"><path d="m7 7 10 10M7 17 17 7"/></svg></span>
+      <span style="flex:0 0 auto;width:24px;height:24px"><svg viewBox="0 0 24 24" width="24" height="24"><path d="M4 7h16M7 12h10M5 17h14"/></svg></span>
+      <span style="flex:0 0 auto;width:24px;height:24px"><svg viewBox="0 0 24 24" width="24" height="24"><path d="M5 5h14v14H5z"/></svg></span>
+      <span style="flex:0 0 auto;width:24px;height:24px"><svg viewBox="0 0 24 24" width="24" height="24"><path d="M6 5h12M6 12h12M6 19h12"/></svg></span>
+      <span style="flex:0 0 auto;width:24px;height:24px"><svg viewBox="0 0 24 24" width="24" height="24"><circle cx="12" cy="12" r="8"/></svg></span>
+      <span style="flex:0 0 auto;width:24px;height:24px"><svg viewBox="0 0 24 24" width="24" height="24"><path d="M4 12h16M12 4v16"/></svg></span>
+      <span style="flex:0 0 auto;width:24px;height:24px;font-size:12px;line-height:24px">16px</span>
+    </div>
     <h3>标题输入框(模拟)</h3>
     <div id="title" contenteditable="true">牛哥 v1.3 测试文章标题</div>
     <h3>摘要输入框(模拟发布设置侧栏)</h3>
@@ -60,6 +71,19 @@
       d.querySelector('pre').textContent = typeof data === 'string' ? data : JSON.stringify(data, null, 2);
       logBody.appendChild(d);
     }
+
+    const fakeEditor = document.getElementById('fake-editor');
+    window.__testIgnorePaste = false;
+    fakeEditor.addEventListener('paste', (e) => {
+      if (window.__testIgnorePaste || !e.clipboardData) {
+        e.preventDefault();
+        return;
+      }
+      const html = e.clipboardData.getData('text/html');
+      e.preventDefault();
+      fakeEditor.innerHTML = html;
+      fakeEditor.dispatchEvent(new Event('input', { bubbles: true }));
+    });
 
     window.addEventListener('load', async () => {
       const T = window.MoPaiTypo, R = window.MoPaiRender, TH = window.MoPaiThemes;

@@ -161,11 +161,8 @@ window.MoPaiThemes = (() => {
     map['figure'] = `margin:${pGap}px 0;text-align:center;`;
     map['figcaption'] = `display:block;text-align:center;font-size:12px;color:${v.secondary};margin-top:6px;`;
 
-    // 微信编辑器的内容大量使用 section/span/font 包装并残留旧模板内联样式,
-    // 格式刷时必须清掉,否则新主题与旧样式混搭。span 清空 = 继承父级主题样式。
-    // section 是微信编辑器原生段落容器,必须带上字号/行距/字间距,
-    // 否则直接躺在 section 里的文字吃不到这些滑杆设置(此前行距"不生效"的根因)。
-    map['section'] = `margin:0;padding:0;font-size:${fs}px;line-height:${lh};letter-spacing:${ls}px;`;
+    // section 是微信原生段落容器,直接装文字的 section 也需要段间距和排版属性。
+    map['section'] = `margin:${pGap}px 0;padding:0;font-size:${fs}px;line-height:${lh};letter-spacing:${ls}px;`;
     map['span'] = ``;
     map['font'] = ``;
     map['u'] = ``;
@@ -174,9 +171,17 @@ window.MoPaiThemes = (() => {
   };
 
   /**
-   * 把样式映射应用到 DOM 树(整体替换元素 inline style,「格式刷」语义)。
+   * 把样式映射应用到 DOM 树,只覆盖主题声明的属性,保留其他原文样式。
    * 对 code 特殊处理:在 pre 内用 pre code 样式,否则用行内 code 样式。
    */
+  function applyInlineDeclarations(el, cssText) {
+    const parsed = document.createElement('div').style;
+    parsed.cssText = cssText;
+    Array.from(parsed).forEach((prop) => {
+      el.style.setProperty(prop, parsed.getPropertyValue(prop), parsed.getPropertyPriority(prop));
+    });
+  }
+
   function applyTheme(root, styleMap) {
     Object.keys(styleMap).forEach((sel) => {
       let els;
@@ -187,7 +192,23 @@ window.MoPaiThemes = (() => {
         if (el.tagName === 'SPAN' && el.closest('pre')) return;
         // 引用链接小节保持专属样式,不参与格式刷
         if (el.closest('[data-mopai-refs]')) return;
-        el.style.cssText = styleMap[sel];
+        if (!styleMap[sel] && (el.tagName === 'SPAN' || el.tagName === 'FONT' || el.tagName === 'U')) {
+          ['color', 'font-size', 'line-height', 'letter-spacing', 'font-family', 'background', 'background-color', 'text-align', 'word-break']
+            .forEach((prop) => el.style.removeProperty(prop));
+          return;
+        }
+        if (el.tagName === 'H1') {
+          ['border-bottom', 'border-bottom-width', 'border-bottom-style', 'border-bottom-color', 'padding-bottom']
+            .forEach((prop) => el.style.removeProperty(prop));
+        }
+        if (el.tagName === 'H2') {
+          ['border-left', 'border-left-width', 'border-left-style', 'border-left-color', 'padding-left', 'line-height']
+            .forEach((prop) => el.style.removeProperty(prop));
+        }
+        applyInlineDeclarations(el, styleMap[sel]);
+        if (el.tagName === 'SECTION' && el.querySelector('p,h1,h2,h3,h4,h5,h6,ul,ol,blockquote,pre,table,figure,hr,section,img,video,iframe')) {
+          el.style.margin = '0';
+        }
       });
     });
     // 代码高亮 token 内联

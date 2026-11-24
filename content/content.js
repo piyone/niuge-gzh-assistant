@@ -58,6 +58,7 @@ await mopai.inject(article.html); // 直接注入公众号编辑器
     rules: { pad: true, punct: true, blank: true, footnote: true, ellipsis: true, collapse: false },
     customWords: [],
     fabEnabled: true,
+    toolbarEnabled: true,
     ai: null, // 合并 MoPaiAI.AI_DEFAULTS
     syncSelection: [], // 记住勾选的同步平台
     customTheme: { // 「自定义」主题的配色(牛哥绿起步)
@@ -214,23 +215,9 @@ await mopai.inject(article.html); // 直接注入公众号编辑器
   function pressSelectAll(ed) {
     try {
       const mac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent || '');
-      ed.dispatchEvent(new KeyboardEvent('keydown', {
+      const view = (ed.ownerDocument && ed.ownerDocument !== document && ed.ownerDocument.defaultView) || window;
+      ed.dispatchEvent(new view.KeyboardEvent('keydown', {
         key: 'a', code: 'KeyA', keyCode: 65, which: 65,
-        bubbles: true, cancelable: true,
-        ...(mac ? { metaKey: true } : { ctrlKey: true }),
-      }));
-      return true;
-    } catch (e) {
-      return false;
-    }
-  }
-
-  /** 模拟 Ctrl/Cmd+Z:让编辑器撤销上一次操作(粘贴内容重复时的自动回退) */
-  function pressUndo(ed) {
-    try {
-      const mac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent || '');
-      ed.dispatchEvent(new KeyboardEvent('keydown', {
-        key: 'z', code: 'KeyZ', keyCode: 90, which: 90,
         bubbles: true, cancelable: true,
         ...(mac ? { metaKey: true } : { ctrlKey: true }),
       }));
@@ -258,6 +245,70 @@ await mopai.inject(article.html); // 直接注入公众号编辑器
     } catch (e) {
       return false;
     }
+  }
+
+  const INJECTION_STYLE_PROPS = [
+    'margin-top', 'margin-right', 'margin-bottom', 'margin-left',
+    'padding-top', 'padding-right', 'padding-bottom', 'padding-left',
+    'font-size', 'line-height', 'letter-spacing', 'font-weight',
+    'color', 'background-color', 'text-align',
+    'border-top-width', 'border-top-style', 'border-top-color',
+    'border-right-width', 'border-right-style', 'border-right-color',
+    'border-bottom-width', 'border-bottom-style', 'border-bottom-color',
+    'border-left-width', 'border-left-style', 'border-left-color',
+    'border-radius', 'max-width', 'white-space',
+  ];
+
+  function normalizedInjectionText(value) {
+    return String(value || '').replace(/\u00a0/g, ' ').replace(/\s+/g, '');
+  }
+
+  function injectionMediaCount(root) {
+    return root.querySelectorAll('img,video,iframe,table,hr').length;
+  }
+
+  function collectInjectionStyles(root) {
+    const values = new Map();
+    root.querySelectorAll('[style]').forEach((el) => {
+      INJECTION_STYLE_PROPS.forEach((prop) => {
+        const value = el.style.getPropertyValue(prop);
+        if (!value) return;
+        const signature = `${prop}:${value.replace(/\s+/g, '').toLowerCase()}`;
+        values.set(signature, (values.get(signature) || 0) + 1);
+      });
+    });
+    return values;
+  }
+
+  function createInjectionExpectation(html, doc) {
+    const root = doc.createElement('div');
+    root.innerHTML = html;
+    return {
+      text: normalizedInjectionText(root.textContent),
+      media: injectionMediaCount(root),
+      styles: collectInjectionStyles(root),
+    };
+  }
+
+  function injectionMatches(ed, expected) {
+    const text = normalizedInjectionText(ed.innerText || ed.textContent);
+    const afterStyles = collectInjectionStyles(ed);
+    return text === expected.text &&
+      injectionMediaCount(ed) === expected.media &&
+      Array.from(expected.styles).every(([signature, count]) => (afterStyles.get(signature) || 0) >= count);
+  }
+
+  async function waitForInjection(ed, expected) {
+    const deadline = Date.now() + 900;
+    while (true) {
+      if (injectionMatches(ed, expected)) return true;
+      if (Date.now() >= deadline) return false;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+  }
+
+  function isModernEditor(ed) {
+    return !!(ed.closest && ed.closest('.ProseMirror,.ql-editor'));
   }
 
   /**
@@ -292,58 +343,69 @@ await mopai.inject(article.html); // 直接注入公众号编辑器
     }
   }
 
-  /**
-   * 把 HTML 注入编辑器:全选 → 等内部选区同步 → 合成 paste → execCommand → innerHTML 多级降级。
-   * ProseMirror 的"DOM 选区 → 内部选区"同步是异步的(selectionchange),
-   * 全选后必须等一拍再粘贴,否则内部选区还在光标处,粘贴会变成追加导致整篇重复。
-   * 粘贴后做重复检测,疑似追加时模拟 Ctrl/Cmd+Z 撤销并用更长延迟重试一次。
-   */
+  let injecting = false;
+
+  /** 通过编辑器输入通道整篇替换,并校验文字、媒体数量和关键样式是否真正写入。 */
   async function injectHtml(html) {
+    if (injecting) return { ok: false, reason: '正在写入编辑器,请稍后再试' };
     const ed = findEditor();
     if (!ed) return { ok: false, reason: '未找到编辑器' };
-    const plainLen = (html.replace(/<[^>]+>/g, '').replace(/\s+/g, '') || '').length;
+    const doc = ed.ownerDocument || document;
+    const view = (doc !== document && doc.defaultView) || window;
+    const expected = createInjectionExpectation(html, doc);
+    const beforeHtml = ed.innerHTML;
+    const failed = (reason) => ({
+      ok: false,
+      reason,
+      manual: true,
+      changed: ed.innerHTML !== beforeHtml,
+    });
 
     const dispatchPaste = () => {
       try {
-        const dt = new DataTransfer();
+        const dt = new view.DataTransfer();
         dt.setData('text/html', html);
         dt.setData('text/plain', html.replace(/<br\s*\/?>/gi, '\n').replace(/<[^>]+>/g, ''));
-        const ev = new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true });
+        const ev = new view.ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true });
         ed.dispatchEvent(ev);
         return true;
       } catch (e) { return false; }
     };
-    const editorTextLen = () => ((ed.innerText || '').replace(/\s+/g, '')).length;
 
-    ed.focus();
-    selectAllInEditor(ed);
-    await new Promise((r) => setTimeout(r, 120)); // 等 PM 把全选同步成内部 AllSelection
-
-    // 1) 合成 paste(ProseMirror 等现代编辑器的正规入口;全选状态下粘贴=整篇替换)
-    if (dispatchPaste()) {
-      await new Promise((r) => setTimeout(r, 180));
-      if (plainLen && editorTextLen() > plainLen * 1.6) {
-        // 疑似"追加"而非"替换":撤销本次粘贴,延长同步时间重试一次
-        pressUndo(ed);
-        await new Promise((r) => setTimeout(r, 150));
-        selectAllInEditor(ed);
-        await new Promise((r) => setTimeout(r, 300));
-        dispatchPaste();
-        await new Promise((r) => setTimeout(r, 180));
-        if (editorTextLen() > plainLen * 1.6) return { ok: true, dup: true };
-      }
-      return { ok: true, via: 'paste' };
-    }
-    // 2) execCommand(必须用编辑器所在文档;iframe 编辑器在主文档上执行会失效)
+    injecting = true;
     try {
-      const doc = ed.ownerDocument || document;
-      doc.execCommand('insertHTML', false, html);
-      return { ok: true, via: 'execCommand' };
-    } catch (e) { /* 降级 */ }
-    // 3) 直接写 DOM
-    ed.innerHTML = html;
-    ed.dispatchEvent(new InputEvent('input', { bubbles: true }));
-    return { ok: true, via: 'dom' };
+      ed.focus();
+      selectAllInEditor(ed);
+      await new Promise((resolve) => setTimeout(resolve, 120));
+
+      if (dispatchPaste()) {
+        if (await waitForInjection(ed, expected)) return { ok: true, via: 'paste' };
+        return failed('编辑器未接受内容或样式,请使用「复制排版结果」后手动粘贴');
+      }
+
+      if (isModernEditor(ed)) {
+        return failed('当前编辑器未接受自动粘贴,请复制后手动粘贴');
+      }
+
+      if (typeof doc.execCommand === 'function') {
+        try {
+          const inserted = doc.execCommand('insertHTML', false, html);
+          if (inserted && await waitForInjection(ed, expected)) return { ok: true, via: 'execCommand' };
+        } catch (e) { /* 继续兼容旧编辑器 */ }
+      }
+
+      // 仅老版 iframe 编辑器可以承受直接 DOM 写入;ProseMirror/通用 contenteditable 不直改。
+      if (ed.tagName === 'BODY' && doc !== document) {
+        ed.innerHTML = html;
+        const InputCtor = view.InputEvent || Event;
+        ed.dispatchEvent(new InputCtor('input', { bubbles: true }));
+        if (await waitForInjection(ed, expected)) return { ok: true, via: 'dom' };
+      }
+
+      return failed('自动写入失败,请使用「复制排版结果」后手动粘贴');
+    } finally {
+      injecting = false;
+    }
   }
 
   async function saveSnapshot(html) {
@@ -779,8 +841,20 @@ await mopai.inject(article.html); // 直接注入公众号编辑器
   let settings = null;
   let panelEl = null;
   let fabEl = null;
+  let toolbarEl = null;
+  let toolbarHostEl = null;
+  let toolbarStickyEl = null;
+  let toolbarObserver = null;
+  let toolbarTimer = 0;
   let previewSrc = 'editor'; // 'editor' | 'md'
   let lastMdHtml = '';
+
+  const NIU_MARK_IMG = `<img src="${chrome.runtime.getURL('icons/icon128-v6.png')}" alt="">`;
+  const TOOLBAR_ACTIONS = [
+    { id: 'format', label: '排版', title: '牛哥 · 一键规范排版' },
+    { id: 'proof', label: 'AI 校对', title: '牛哥 · AI 校对' },
+    { id: 'rules', label: '体检', title: '牛哥 · 发布前规则体检' },
+  ];
 
   const TABS = [
     ['import', '导入'], ['format', '排版'], ['ai', 'AI写'], ['check', '检查'],
@@ -791,7 +865,7 @@ await mopai.inject(article.html); // 直接注入公众号编辑器
     if (fabEl || !settings.fabEnabled) return;
     fabEl = document.createElement('div');
     fabEl.className = 'mopai-fab';
-    fabEl.innerHTML = '<span>牛</span>';
+    fabEl.innerHTML = `<span>${NIU_MARK_IMG}</span>`;
     fabEl.title = '牛哥公众号助手';
     document.body.appendChild(fabEl);
     // 拖拽 + 点击
@@ -817,11 +891,243 @@ await mopai.inject(article.html); // 直接注入公众号编辑器
     });
   }
 
+  function toolbarScore(el, editor) {
+    if (!isVisibleEl(el) || el === editor || el.contains(editor) || editor.contains(el) || el.closest('.mopai-panel,.mopai-toolbar')) return -Infinity;
+    const rect = el.getBoundingClientRect();
+    const edRect = editor.getBoundingClientRect();
+    const overlap = Math.min(rect.right, edRect.right) - Math.max(rect.left, edRect.left);
+    const overlapRatio = overlap / Math.max(1, Math.min(rect.width, edRect.width));
+    if (el === toolbarHostEl && el.isConnected && overlapRatio > 0.3) return 1000;
+    if (rect.width < 100 || rect.height < 24 || rect.height > 240 || rect.bottom > edRect.top + 48) return -Infinity;
+    const sig = `${el.id || ''} ${el.className || ''}`.toLowerCase();
+    const text = (el.textContent || '').replace(/\s+/g, ' ');
+    const labels = Array.from(el.querySelectorAll('[aria-label],[title],[data-tooltip]'))
+      .map((item) => item.getAttribute('aria-label') || item.getAttribute('title') || item.getAttribute('data-tooltip') || '')
+      .join(' ');
+    const semanticText = `${text} ${labels}`;
+    const buttons = el.querySelectorAll('button,[role="button"]').length;
+    const icons = el.querySelectorAll('svg,i,[class*="icon"]').length;
+    const toolbarHint = /toolbar|tool-bar|editor_tool|editor-tool|ql-toolbar/.test(sig);
+    const editHint = /撤销|重做|清除格式|加粗|字号|上传|图片|视频|模板|设计|undo|redo|bold|italic|underline|font|align|list|table|quote|code|emoji/i.test(semanticText);
+    const iconToolbar = icons >= 6;
+    if (!toolbarHint && !editHint && buttons < 3 && !iconToolbar) return -Infinity;
+    const distance = edRect.top - rect.bottom;
+    if (distance > (toolbarHint || editHint || icons >= 8 ? 900 : 420)) return -Infinity;
+    const style = getComputedStyle(el);
+    if (style.position === 'fixed' && !toolbarHint && !editHint) return -Infinity;
+    let score = 55;
+    if (/flex|grid/.test(style.display) && style.flexDirection !== 'column') score += 35;
+    if (el.getAttribute('role') === 'toolbar') score += 90;
+    if (/toolbar|tool-bar|editor_tool|editor-tool|ql-toolbar|weui-desktop-menu/.test(sig)) score += 110;
+    if (buttons >= 3) score += 25;
+    if (icons >= 8) score += 75;
+    else if (icons >= 6) score += 60;
+    else if (icons >= 3) score += 25;
+    if (editHint) score += 45;
+    if (overlapRatio > 0.3) score += 25;
+    return score + Math.max(0, 30 - rect.height / 10);
+  }
+
+  function findToolbarHost(editor) {
+    const candidates = new Set(document.querySelectorAll(
+      '[role="toolbar"],[class*="toolbar"],[id*="toolbar"],[class*="tool-bar"],[id*="tool-bar"],[class*="editor_tool"],[id*="editor_tool"],[class*="menu"],[id*="menu"],.ql-toolbar'
+    ));
+    const addNearbyCandidate = (el) => {
+      if (!el || el === editor || editor.contains(el)) return;
+      candidates.add(el);
+      Array.from(el.children).forEach((child) => {
+        if (/^(DIV|SECTION|HEADER|NAV)$/.test(child.tagName)) candidates.add(child);
+      });
+    };
+    let sibling = editor.previousElementSibling;
+    for (let i = 0; sibling && i < 12; i++, sibling = sibling.previousElementSibling) addNearbyCandidate(sibling);
+    let ancestor = editor.parentElement;
+    for (let depth = 0; ancestor && depth < 5; depth++, ancestor = ancestor.parentElement) {
+      sibling = ancestor.previousElementSibling;
+      for (let i = 0; sibling && i < 4; i++, sibling = sibling.previousElementSibling) addNearbyCandidate(sibling);
+    }
+    let best = null;
+    let bestScore = 80;
+    candidates.forEach((el) => {
+      const score = toolbarScore(el, editor);
+      if (score > bestScore) { best = el; bestScore = score; }
+    });
+    return best;
+  }
+
+  function findCompleteToolbarHost(candidate, editor) {
+    let host = candidate;
+    let parent = candidate.parentElement;
+    for (let depth = 0; parent && depth < 5; depth++, parent = parent.parentElement) {
+      if (parent === document.body || parent.contains(editor) || editor.contains(parent)) break;
+      const style = getComputedStyle(parent);
+      if (!/flex|grid/.test(style.display) || style.flexDirection === 'column') break;
+      const parentRect = parent.getBoundingClientRect();
+      if (parentRect.height < 24 || parentRect.height > 120) break;
+      const hostIcons = host.querySelectorAll('svg,i,[class*="icon"]').length;
+      const parentIcons = parent.querySelectorAll('svg,i,[class*="icon"]').length;
+      const hostButtons = host.querySelectorAll('button,[role="button"]').length;
+      const parentButtons = parent.querySelectorAll('button,[role="button"]').length;
+      if (parentIcons < hostIcons && parentButtons < hostButtons) break;
+      if (parent.scrollWidth + 2 < host.scrollWidth) break;
+      host = parent;
+    }
+    return host;
+  }
+
+  function createToolbar() {
+    toolbarEl = document.createElement('div');
+    toolbarEl.className = 'mopai-toolbar';
+    toolbarEl.setAttribute('role', 'group');
+    toolbarEl.setAttribute('aria-label', '牛哥公众号助手快捷操作');
+    toolbarEl.innerHTML = `<span class="mopai-toolbar-brand" title="牛哥公众号助手">${NIU_MARK_IMG}</span>` +
+      TOOLBAR_ACTIONS.map((a) => `<button type="button" class="mopai-toolbar-btn" data-mopai-action="${a.id}" title="${a.title}">${a.label}</button>`).join('');
+    toolbarEl.addEventListener('mousedown', (e) => e.preventDefault());
+    toolbarEl.addEventListener('click', (e) => {
+      const btn = e.target.closest('[data-mopai-action]');
+      if (btn) runToolbarAction(btn.dataset.mopaiAction);
+    });
+  }
+
+  function toolbarScrollParent(el) {
+    let parent = el.parentElement;
+    while (parent && parent !== document.body) {
+      const style = getComputedStyle(parent);
+      if (/(auto|scroll)/.test(style.overflowY) && (parent.clientHeight === 0 || parent.scrollHeight > parent.clientHeight + 1)) return parent;
+      parent = parent.parentElement;
+    }
+    return document.scrollingElement || document.documentElement;
+  }
+
+  function findStickyToolbarTarget(host, editor) {
+    const scroller = toolbarScrollParent(host);
+    let target = host;
+    let parent = host.parentElement;
+    while (parent && parent !== scroller && parent !== document.body) {
+      if (parent.contains(editor) || editor.contains(parent)) break;
+      const rect = parent.getBoundingClientRect();
+      if (rect.height < 24 || rect.height > 160) break;
+      target = parent;
+      parent = parent.parentElement;
+    }
+    return target;
+  }
+
+  function clearPinnedToolbarHost() {
+    if (toolbarStickyEl) {
+      toolbarStickyEl.classList.remove('mopai-native-toolbar-host');
+      toolbarStickyEl.style.removeProperty('--mopai-toolbar-top');
+      toolbarStickyEl = null;
+    }
+    toolbarHostEl = null;
+  }
+
+  function updatePinnedToolbarHost(host, editor) {
+    const stickyTarget = host ? findStickyToolbarTarget(host, editor) : null;
+    if (toolbarHostEl === host && toolbarStickyEl === stickyTarget) return;
+    clearPinnedToolbarHost();
+    if (!host || !stickyTarget) return;
+    toolbarHostEl = host;
+    const position = getComputedStyle(stickyTarget).position;
+    if (position === 'fixed' || position === 'sticky') {
+      toolbarStickyEl = stickyTarget;
+      return;
+    }
+    const top = Math.max(0, Math.round(stickyTarget.getBoundingClientRect().top));
+    stickyTarget.style.setProperty('--mopai-toolbar-top', `${top}px`);
+    stickyTarget.classList.add('mopai-native-toolbar-host');
+    toolbarStickyEl = stickyTarget;
+  }
+
+  function ensureToolbar() {
+    if (!settings || settings.toolbarEnabled === false) {
+      clearPinnedToolbarHost();
+      toolbarEl?.remove();
+      toolbarEl = null;
+      return;
+    }
+    const editor = findEditor();
+    if (!editor) {
+      clearPinnedToolbarHost();
+      toolbarEl?.remove();
+      toolbarEl = null;
+      return;
+    }
+    if (!toolbarEl) createToolbar();
+    const toolbarCandidate = findToolbarHost(editor);
+    const nativeHost = toolbarCandidate ? findCompleteToolbarHost(toolbarCandidate, editor) : null;
+    const host = nativeHost || editor.parentElement || document.body;
+    const atTarget = nativeHost
+      ? toolbarEl.parentElement === host && toolbarEl.previousElementSibling === null
+      : toolbarEl.parentElement === host && toolbarEl.nextElementSibling === editor;
+    if (!atTarget) {
+      host.querySelectorAll(':scope > .mopai-toolbar').forEach((staleToolbar) => {
+        if (staleToolbar !== toolbarEl) staleToolbar.remove();
+      });
+      if (nativeHost) host.insertBefore(toolbarEl, host.firstChild);
+      else host.insertBefore(toolbarEl, editor);
+    }
+    toolbarEl.classList.toggle('mopai-toolbar-fallback', !nativeHost);
+    updatePinnedToolbarHost(nativeHost, editor);
+  }
+
+  function scheduleToolbarMount() {
+    if (!settings || settings.toolbarEnabled === false) return;
+    clearTimeout(toolbarTimer);
+    toolbarTimer = setTimeout(ensureToolbar, 100);
+  }
+
+  function startToolbarObserver() {
+    if (!settings || settings.toolbarEnabled === false || toolbarObserver) return;
+    ensureToolbar();
+    toolbarObserver = new MutationObserver(scheduleToolbarMount);
+    toolbarObserver.observe(document.body, { childList: true, subtree: true });
+    window.addEventListener('scroll', scheduleToolbarMount, true);
+    window.addEventListener('resize', scheduleToolbarMount);
+  }
+
+  function stopToolbar() {
+    toolbarObserver?.disconnect();
+    toolbarObserver = null;
+    window.removeEventListener('scroll', scheduleToolbarMount, true);
+    window.removeEventListener('resize', scheduleToolbarMount);
+    clearTimeout(toolbarTimer);
+    clearPinnedToolbarHost();
+    toolbarEl?.remove();
+    toolbarEl = null;
+  }
+
+  function openPanelTab(tab) {
+    if (!panelEl || !panelEl.isConnected) buildPanel();
+    panelEl.querySelectorAll('.mopai-tab').forEach((b) => b.classList.toggle('on', b.dataset.tab === tab));
+    renderTab(tab);
+  }
+
+  function runToolbarAction(action) {
+    if (action === 'format') {
+      openPanelTab('format');
+      panelEl.querySelector('[data-act="fmt-all"]')?.click();
+      return;
+    }
+    if (action !== 'proof' && action !== 'rules') return;
+    checkMode = action === 'proof' ? 'proof' : 'rules';
+    openPanelTab('check');
+    if (action === 'rules') return;
+    const proofBtn = panelEl.querySelector('[data-act="ai-run"]');
+    if (proofBtn?.disabled) {
+      const st = getAiStatus();
+      toast('请先配置 AI 模型:' + st.missing.join('、'), 'err');
+      openOptionsPage();
+      return;
+    }
+    proofBtn?.click();
+  }
+
   function togglePanel() {
     if (panelEl && panelEl.isConnected) {
       panelEl.remove();
       panelEl = null;
-      fabEl.classList.remove('active');
+      fabEl && fabEl.classList.remove('active');
       return;
     }
     buildPanel();
@@ -1035,7 +1341,7 @@ await mopai.inject(article.html); // 直接注入公众号编辑器
         <button class="mopai-btn ghost" data-act="toggle-preview">📱 预览 开/关</button>
       </div>
       <div class="mopai-report" id="mopai-beauty-report">点主题卡片即时预览(不改编辑器),满意再套用</div>
-      <div class="mopai-phone-wrap" id="mopai-preview-wrap"><div class="mopai-phone"><iframe id="mopai-beauty-iframe"></iframe></div></div>
+      <div class="mopai-phone-wrap" id="mopai-preview-wrap"><div class="mopai-phone"><iframe id="mopai-beauty-iframe" sandbox=""></iframe></div></div>
 
       <div class="mopai-section-title">③ 防丢稿 · 快照</div>
       <div class="mopai-row">
@@ -1076,8 +1382,9 @@ await mopai.inject(article.html); // 直接注入公众号编辑器
         // 公众号编辑器是 ProseMirror 内核,直接改 DOM 会被其内部状态还原;
         // 必须走"克隆处理 → 全选粘贴整篇替换"的管线(injectHtml 已同步 PM 内部全选)
         const html = window.MoPaiRender.themeExisting(srcT, settings.theme, fmtThemeOverrides());
-        await injectHtml(html);
+        const r = await injectHtml(html);
         refreshPreview();
+        if (!r.ok) return toast(`${r.reason}(注入前已存快照)`, 'err');
         toast(`已套用「${themeName()}」主题 ✅(注入前已存快照)`);
         return;
       }
@@ -1148,11 +1455,9 @@ await mopai.inject(article.html); // 直接注入公众号编辑器
       }
       const r = await injectHtml(src.innerHTML);
       report.innerHTML = !r.ok
-        ? '写入编辑器失败,请重试(快照已留档)'
-        : r.dup
-          ? '⚠️ 已写入,但检测到内容疑似重复——请点「恢复快照」回退后再试一次'
-          : `✅ 排版成功:${rep.headings} 个小标题识别 · ${rep.spaces} 处文字规范 · ${rep.ellipsis} 处省略号 · ${rep.collapsed} 处标点收敛 · ${rep.blanks} 个空段清理 · ${rep.footnotes} 条外链脚注化`;
-      toast(r.ok && !r.dup ? '排版成功 ✅' : r.dup ? '内容疑似重复,建议恢复快照后重试' : '写入失败', r.ok && !r.dup ? undefined : r.dup ? undefined : 'err');
+        ? `写入编辑器失败:${r.reason}(快照已留档)`
+        : `✅ 排版成功:${rep.headings} 个小标题识别 · ${rep.spaces} 处文字规范 · ${rep.ellipsis} 处省略号 · ${rep.collapsed} 处标点收敛 · ${rep.blanks} 个空段清理 · ${rep.footnotes} 条外链脚注化`;
+      toast(r.ok ? '排版成功 ✅' : '写入失败,请按提示手动粘贴', r.ok ? undefined : 'err');
     });
 
     // 主题预览与字号/行距联动
@@ -1439,7 +1744,8 @@ await mopai.inject(article.html); // 直接注入公众号编辑器
       await saveSnapshot(cur.innerHTML);
       const r = window.MoPaiAI.applyIssueToRoot(cur, it);
       if (r === 'applied') {
-        injectHtml(cur.innerHTML);
+        const injected = await injectHtml(cur.innerHTML);
+        if (!injected.ok) return toast(`替换失败:${injected.reason}`, 'err');
         it.applied = true;
         renderIssues();
         toast('已替换 ✅(可「排版 → 恢复快照」回滚)');
@@ -1459,7 +1765,11 @@ await mopai.inject(article.html); // 直接注入公众号编辑器
         if (!cur) return toast('未找到编辑器', 'err');
         saveSnapshot(cur.innerHTML).then(async () => {
           const r = window.MoPaiAI.applyIssues(cur, issues);
-          await injectHtml(cur.innerHTML);
+          const injected = await injectHtml(cur.innerHTML);
+          if (!injected.ok) {
+            renderIssues();
+            return toast(`应用失败:${injected.reason}`, 'err');
+          }
           renderIssues();
           toast(`已应用 ${r.applied} 处${r.cross ? `,${r.cross} 处跨节点需手动` : ''}${r.missed ? `,${r.missed} 处未找到` : ''}`);
         });
@@ -1812,12 +2122,16 @@ await mopai.inject(article.html); // 直接注入公众号编辑器
           await saveSnapshot(cur ? cur.innerHTML : '');
           await pushSnapshotHistory(cur ? cur.innerHTML : '');
           const r = window.MoPaiRender.renderMarkdown(article, settings.theme, { footnote: false, ...fmtThemeOverrides() });
-          if (replace) {
-            await injectHtml(r.html);
-          } else {
+          let html = r.html;
+          if (!replace) {
             const merged = document.createElement('div');
             merged.innerHTML = cur.innerHTML + r.html;
-            await injectHtml(merged.innerHTML);
+            html = merged.innerHTML;
+          }
+          const injected = await injectHtml(html);
+          if (!injected.ok) {
+            toast(`写入失败:${injected.reason}`, 'err');
+            return;
           }
           toast(replace ? '已替换编辑器内容 ✅(原内容已存快照)' : '已追加到编辑器 ✅(原内容已存快照)');
         } finally {
@@ -2133,8 +2447,8 @@ await mopai.inject(article.html); // 直接注入公众号编辑器
         if (!s) return toast('还没有快照', 'err');
         const cur = getEditorRoot();
         if (cur) await saveSnapshot(cur.innerHTML);
-        await injectHtml(s.html);
-        toast('已恢复快照 ✅');
+        const r = await injectHtml(s.html);
+        toast(r.ok ? '已恢复快照 ✅' : `恢复失败:${r.reason}`, r.ok ? undefined : 'err');
       }
     });
   }
@@ -2149,7 +2463,7 @@ await mopai.inject(article.html); // 直接注入公众号编辑器
         <button class="mopai-btn ${previewSrc === 'md' ? 'primary' : ''}" data-act="pv-md">Markdown 渲染结果</button>
       </div>
       <div class="mopai-report">375px 手机宽度实时预览,当前主题「${esc(themeName())}」</div>
-      <div class="mopai-phone-wrap tall"><div class="mopai-phone"><iframe id="mopai-pv-iframe"></iframe></div></div>
+      <div class="mopai-phone-wrap tall"><div class="mopai-phone"><iframe id="mopai-pv-iframe" sandbox=""></iframe></div></div>
     `;
     const iframe = p.querySelector('#mopai-pv-iframe');
     const refresh = () => {
@@ -2179,6 +2493,7 @@ await mopai.inject(article.html); // 直接注入公众号编辑器
       window.MoPaiThemes.registerCustom(settings.customTheme); // 用户自定义配色注入主题系统
     }
     if (settings.fabEnabled) ensureFab();
+    if (settings.toolbarEnabled !== false) startToolbarObserver();
 
     // 设置页修改后实时同步到面板(不用刷新编辑器页面)
     try {
@@ -2191,6 +2506,8 @@ await mopai.inject(article.html); // 直接注入公众号编辑器
           if (window.MoPaiThemes && window.MoPaiThemes.registerCustom) {
             window.MoPaiThemes.registerCustom(settings.customTheme);
           }
+          if (settings.toolbarEnabled === false) stopToolbar();
+          else startToolbarObserver();
         });
       }
     } catch (e) { /* 忽略 */ }
@@ -2198,7 +2515,8 @@ await mopai.inject(article.html); // 直接注入公众号编辑器
 
   // 供测试页调用
   window.MoPaiContent = {
-    mount: async () => { settings = await loadSettings(); ensureFab(); },
+    mount: async () => { settings = await loadSettings(); ensureFab(); startToolbarObserver(); },
+    mountToolbar: startToolbarObserver,
     findEditor, injectHtml, getEditorRoot, runChecks, getAiStatus,
     getSettings: () => settings,
     setSettings: (s) => { settings = deepMerge(settings, s); saveSettings(); },

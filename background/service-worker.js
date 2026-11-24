@@ -133,7 +133,7 @@ async function mpNotify(title, message) {
   try {
     await chrome.notifications.create({
       type: 'basic',
-      iconUrl: chrome.runtime.getURL('icons/icon128.png'),
+      iconUrl: chrome.runtime.getURL('icons/icon128-v6.png'),
       title,
       message: String(message || '').slice(0, 200),
     });
