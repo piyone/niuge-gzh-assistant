@@ -122,10 +122,13 @@ async function handleAiTest(msg) {
 // 流程(与 wechatsync 微信适配器同款):主页拿 token → 素材列表拿 ticket_id →
 // POST filetransfer?action=upload_material 带 cookie 上传 → 返回 cdn_url。
 // 防盗链图:临时 DNR 会话规则把 Referer 伪装成图片所在页面。
-// 多账号:mp 后台支持同浏览器多号同时登录,主页 token 去重后 >1 个时弹出选择器窗口。
+// 多账号:mp 后台支持同浏览器多号同时登录,检测到多个账号时弹出选择器窗口。
 
 chrome.runtime.onInstalled.addListener(() => {
-  getAccountsCached(true).catch(() => { /* 安装/更新后立即建菜单 */ });
+  ensureAccountCache().catch(() => { /* 安装/更新后从缓存恢复菜单 */ });
+});
+chrome.runtime.onStartup.addListener(() => {
+  ensureAccountCache().catch(() => { /* 浏览器启动后从缓存恢复菜单 */ });
 });
 
 /** 系统通知(图标必须用扩展绝对 URL,SW 里相对路径会解析到 background/ 下导致下载失败) */
@@ -158,38 +161,207 @@ function parseMpHomeMeta(html) {
     const m = block.match(re);
     return m ? m[1] : '';
   };
-  const token = get(/[{;]\s*t:\s*["'](\d{3,})["']/) || get(/token:\s*["'](\d{3,})["']/);
+  const token = get(/["']?t["']?\s*:\s*["']?(\d{3,})["']?(?=\s*[,;}])/) ||
+    get(/["']?token["']?\s*:\s*["']?(\d{3,})["']?(?=\s*[,;}])/);
   if (!token) return null;
-  let avatar = get(/head_img:\s*["']([^"']{6,})["']/);
+  const field = (name) => get(new RegExp(`["']?${name}["']?\\s*:\\s*["']([^"']+)["']`));
+  let avatar = field('head_img');
   if (avatar.startsWith('http://')) avatar = avatar.replace('http://', 'https://');
+  if (avatar.startsWith('//')) avatar = 'https:' + avatar;
   return {
     token,
-    ticket: get(/ticket:\s*["']([^"']{6,})["']/),
-    userName: get(/user_name:\s*["']([^"']{4,})["']/),
-    nick: get(/nick_name:\s*["']([^"']{1,60})["']/),
+    ticket: field('ticket'),
+    userName: field('user_name'),
+    nick: field('nick_name'),
     avatar,
-    svrTime: get(/time:\s*["'](\d{9,})["']/) || String(Math.floor(Date.now() / 1000)),
+    svrTime: get(/["']?time["']?\s*:\s*["']?(\d{9,})["']?(?=\s*[,;}])/) || String(Math.floor(Date.now() / 1000)),
   };
 }
 
-/** 抓主页,提取全部已登录账号(主页 commonData 为主;多账号切换 token 经页面中继逐个取元信息) */
+const MAX_MP_ACCOUNTS = 20;
+
+function mergeMpAccount(accounts, account) {
+  if (!account || !account.token) return;
+  const index = accounts.findIndex((item) => item.token === account.token);
+  if (index === -1) {
+    accounts.push(account);
+    return;
+  }
+  const current = accounts[index];
+  Object.keys(account).forEach((key) => {
+    if (!current[key] && account[key]) current[key] = account[key];
+  });
+}
+
+function extractMpTokens(text) {
+  return [...String(text || '').matchAll(/(?<![a-zA-Z_])token=(\d{3,})/g)].map((match) => match[1]);
+}
+
+function extractMpTabTokens(tabs) {
+  const tokens = [];
+  (tabs || []).forEach((tab) => {
+    try {
+      const token = new URL(tab.url).searchParams.get('token');
+      if (token && /^\d{3,}$/.test(token)) tokens.push(token);
+    } catch (e) { /* 忽略无效标签页地址 */ }
+  });
+  return tokens;
+}
+
+function normalizeMpAccountEntry(entry) {
+  if (!entry || typeof entry !== 'object') return null;
+  if (entry.data && typeof entry.data === 'object') entry = entry.data;
+  const token = String(entry.token || entry.t || '');
+  if (!/^\d{3,}$/.test(token)) return null;
+  let avatar = entry.head_img || entry.headImg || entry.avatar || '';
+  if (avatar.startsWith('http://')) avatar = avatar.replace('http://', 'https://');
+  if (avatar.startsWith('//')) avatar = 'https:' + avatar;
+  return {
+    token,
+    ticket: entry.ticket || '',
+    userName: entry.user_name || entry.userName || entry.username || entry.alias || '',
+    nick: entry.nick_name || entry.nickName || entry.nick || entry.nickname || entry.name || '',
+    avatar,
+    svrTime: String(entry.time || entry.svr_time || entry.svrTime || Math.floor(Date.now() / 1000)),
+  };
+}
+
+async function readMpWindowAccountsFromTab(tabId) {
+  try {
+    const res = await chrome.scripting.executeScript({
+      target: { tabId },
+      world: 'MAIN',
+      func: () => {
+        const wx = window.wx;
+        if (!wx || typeof wx !== 'object') return null;
+        const accounts = [];
+        const tokens = new Set();
+        const seen = new Set();
+        const isAccount = (value) => value && typeof value === 'object' &&
+          (value.token || value.t) &&
+          (value.user_name || value.userName || value.username || value.alias ||
+            value.nick_name || value.nickName || value.nick || value.nickname || value.name);
+        const add = (value) => {
+          if (!isAccount(value)) return;
+          const token = String(value.token || value.t);
+          if (!/^\d{3,}$/.test(token)) return;
+          const key = [token, value.ticket || '', value.user_name || value.userName || ''].join('|');
+          if (seen.has(key)) return;
+          seen.add(key);
+          accounts.push({
+            token,
+            ticket: value.ticket || '',
+            user_name: value.user_name || value.userName || value.username || value.alias || '',
+            nick_name: value.nick_name || value.nickName || value.nick || value.nickname || value.name || '',
+            head_img: value.head_img || value.headImg || value.avatar || '',
+            time: value.time || value.svr_time || value.svrTime || '',
+          });
+          tokens.add(token);
+        };
+        const walk = (value, depth) => {
+          if (!value || typeof value !== 'object' || depth > 6 || seen.has(value)) return;
+          seen.add(value);
+          if (Array.isArray(value)) {
+            value.forEach((item) => {
+              add(item);
+              walk(item, depth + 1);
+            });
+            return;
+          }
+          add(value);
+          Object.values(value).forEach((child) => walk(child, depth + 1));
+        };
+        walk(wx.commonData, 0);
+        walk(wx.data, 0);
+        walk(wx.accountList, 0);
+        Object.keys(window).filter((key) => /account/i.test(key)).slice(0, 20)
+          .forEach((key) => walk(window[key], 0));
+        if (typeof document !== 'undefined') {
+          const collectToken = (raw) => {
+            const match = String(raw || '').match(/(?:^|[?&])token=(\d{3,})(?:&|$)/);
+            if (match) tokens.add(match[1]);
+          };
+          document.querySelectorAll('[href*="token="], [data-token]').forEach((el) => {
+            collectToken(el.getAttribute('href'));
+            const dataToken = el.getAttribute('data-token');
+            if (/^\d{3,}$/.test(dataToken || '')) tokens.add(dataToken);
+          });
+          const html = document.documentElement ? document.documentElement.innerHTML : '';
+          for (const match of html.matchAll(/(?<![a-zA-Z_])token=(\d{3,})/g)) tokens.add(match[1]);
+        }
+        const common = wx.commonData && (wx.commonData.data || wx.commonData);
+        return { current: common, accounts, tokens: [...tokens] };
+      },
+      args: [],
+    });
+    return res && res[0] && res[0].result;
+  } catch (e) {
+    return null;
+  }
+}
+
+async function readMpWindowAccounts(tabs) {
+  const usable = (tabs || []).filter((tab) =>
+    tab && tab.status === 'complete' && !/^chrome-error:/i.test(tab.url || ''));
+  if (!usable.length) {
+    const tabId = await ensureMpTab();
+    const result = await readMpWindowAccountsFromTab(tabId);
+    return result ? [result] : [];
+  }
+  const results = await Promise.all(usable.slice(0, MAX_MP_ACCOUNTS).map((tab) =>
+    readMpWindowAccountsFromTab(tab.id)));
+  return results.filter(Boolean);
+}
+
+/** 抓主页并合并主页、各后台标签页页面账号列表和账号 token,逐个解析元信息 */
 async function listMpAccounts() {
   const resp = await fetchWithTimeout('https://mp.weixin.qq.com/', { credentials: 'include' }, 20000);
+  if (!resp.ok) throw new Error(`公众号主页访问失败(HTTP ${resp.status})`);
   const html = await resp.text();
   const primary = parseMpHomeMeta(html);
-  const tokens = [...new Set([...html.matchAll(/(?<![a-zA-Z_])token=(\d{3,})/g)].map((m) => m[1]))];
   const accounts = [];
   if (primary) accounts.push(primary);
-  // 多账号:主页/账号切换页会列出其他已登录账号的 token,逐个(最多 3 个)取各自主页解析元信息
-  for (const tk of tokens.slice(0, 3)) {
-    if (primary && tk === primary.token) continue;
-    try {
-      const h = await mpPageFetchText(`https://mp.weixin.qq.com/cgi-bin/home?t=home&token=${tk}&lang=zh_CN`);
-      const m = parseMpHomeMeta(h);
-      if (m && !accounts.some((a) => a.token === m.token)) accounts.push(m);
-    } catch (e) { /* 中继失败时跳过该账号 */ }
+  const tokens = new Set([...extractMpTokens(html), ...extractMpTokens(resp.url)]);
+  if (primary) tokens.add(primary.token);
+  let tabs = [];
+  try {
+    tabs = await chrome.tabs.query({ url: 'https://mp.weixin.qq.com/*' });
+    extractMpTabTokens(tabs).forEach((token) => tokens.add(token));
+  } catch (e) { /* 标签页不可读时不阻塞主页账号检测 */ }
+  let windowAccounts = [];
+  try {
+    windowAccounts = await readMpWindowAccounts(tabs);
+  } catch (e) { /* 页面数据不可读时保留主页检测结果 */ }
+  windowAccounts.forEach((data) => {
+    const current = normalizeMpAccountEntry(data.current);
+    mergeMpAccount(accounts, current);
+    if (current) tokens.add(current.token);
+    (data.tokens || []).forEach((token) => {
+      if (/^\d{3,}$/.test(token)) tokens.add(token);
+    });
+    (data.accounts || []).forEach((entry) => {
+      const account = normalizeMpAccountEntry(entry);
+      mergeMpAccount(accounts, account);
+      if (account) tokens.add(account.token);
+    });
+  });
+  const pending = [...tokens].slice(0, MAX_MP_ACCOUNTS).filter((token) => {
+    const existing = accounts.find((account) => account.token === token);
+    return !existing || !existing.ticket || !existing.userName;
+  });
+  for (let index = 0; index < pending.length; index += 3) {
+    const batch = pending.slice(index, index + 3);
+    const resolved = await Promise.all(batch.map(async (token) => {
+      try {
+        const page = await mpPageFetchText(`https://mp.weixin.qq.com/cgi-bin/home?t=home&token=${token}&lang=zh_CN`);
+        return parseMpHomeMeta(page);
+      } catch (e) {
+        return null;
+      }
+    }));
+    resolved.forEach((account) => mergeMpAccount(accounts, account));
   }
-  return { accounts, html, url: resp.url, tokens };
+  return { accounts, html, url: resp.url, tokens: [...tokens] };
 }
 
 /**
@@ -197,65 +369,79 @@ async function listMpAccounts() {
  * 但页面内的同源请求不会。因此复用(或后台新建)一个 mp 标签页,用 chrome.scripting
  * 在页面上下文里发 fetch——与真实用户操作完全同源,不会被拦。
  */
-let mpTabPromise = null;
-function ensureMpTab() {
-  if (!mpTabPromise) {
-    mpTabPromise = (async () => {
-      const tabs = await chrome.tabs.query({ url: 'https://mp.weixin.qq.com/*' });
-      if (tabs.length) return tabs[0].id;
+let mpTabCreatePromise = null;
+async function ensureMpTab() {
+  const tabs = await chrome.tabs.query({ url: 'https://mp.weixin.qq.com/*' });
+  const available = tabs.filter((tab) => tab.status === 'complete' && !/^chrome-error:/i.test(tab.url || ''));
+  const ready = available.find((tab) => /\/cgi-bin\//.test(tab.url || '')) || available[0];
+  if (ready) return ready.id;
+  if (!mpTabCreatePromise) {
+    mpTabCreatePromise = (async () => {
       const tab = await chrome.tabs.create({ url: 'https://mp.weixin.qq.com/', active: false });
       await new Promise((resolve) => {
+        let timer = 0;
+        const finish = () => {
+          chrome.tabs.onUpdated.removeListener(listener);
+          clearTimeout(timer);
+          resolve();
+        };
         const listener = (id, info) => {
-          if (id === tab.id && info.status === 'complete') {
-            chrome.tabs.onUpdated.removeListener(listener);
-            resolve();
-          }
+          if (id === tab.id && info.status === 'complete') finish();
         };
         chrome.tabs.onUpdated.addListener(listener);
-        setTimeout(resolve, 15000); // 兜底,避免页面一直挂起
+        timer = setTimeout(finish, 15000);
       });
       return tab.id;
-    })().catch((e) => { mpTabPromise = null; throw e; });
+    })().finally(() => { mpTabCreatePromise = null; });
   }
-  return mpTabPromise;
+  return mpTabCreatePromise;
+}
+
+async function runInMpTab(func, args, world) {
+  let lastError = null;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const tabId = await ensureMpTab();
+    try {
+      const options = { target: { tabId }, func, args };
+      if (world) options.world = world;
+      const res = await chrome.scripting.executeScript(options);
+      const out = res && res[0] && res[0].result;
+      if (out === undefined) throw new Error('页面中继无返回');
+      return out;
+    } catch (e) {
+      lastError = e;
+    }
+  }
+  throw lastError || new Error('页面中继执行失败');
 }
 
 /** 在 mp 页面上下文里 GET 文本 */
 async function mpPageFetchText(url) {
-  const tabId = await ensureMpTab();
-  const res = await chrome.scripting.executeScript({
-    target: { tabId },
-    func: (u) => fetch(u, { credentials: 'include' }).then((r) => r.text()),
-    args: [url],
-  });
-  const out = res && res[0] && res[0].result;
+  const out = await runInMpTab(
+    (u) => fetch(u, { credentials: 'include' }).then((r) => r.text()),
+    [url],
+  );
   if (typeof out !== 'string') throw new Error('页面中继无返回(标签页可能刚打开,请重试)');
   return out;
 }
 
 /** 在 mp 页面上下文里 POST multipart 上传(SW↔页面用 base64 传图片) */
 async function mpPageUpload(url, b64, mime, filename) {
-  const tabId = await ensureMpTab();
-  const res = await chrome.scripting.executeScript({
-    target: { tabId },
-    func: async (u, data, m, name) => {
-      const bin = atob(data);
-      const bytes = new Uint8Array(bin.length);
-      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-      const form = new FormData();
-      // 微信上传接口要求的 5 个元数据字段(与网页端手动上传一致)
-      form.append('type', m);
-      form.append('id', String(Date.now()));
-      form.append('name', name);
-      form.append('lastModifiedDate', new Date().toString());
-      form.append('size', String(bytes.length));
-      form.append('file', new Blob([bytes], { type: m }), name);
-      const r = await fetch(u, { method: 'POST', body: form, credentials: 'include' });
-      return r.text();
-    },
-    args: [url, b64, mime, filename],
-  });
-  const out = res && res[0] && res[0].result;
+  const out = await runInMpTab(async (u, data, m, name) => {
+    const bin = atob(data);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    const form = new FormData();
+    // 微信上传接口要求的 5 个元数据字段(与网页端手动上传一致)
+    form.append('type', m);
+    form.append('id', String(Date.now()));
+    form.append('name', name);
+    form.append('lastModifiedDate', new Date().toString());
+    form.append('size', String(bytes.length));
+    form.append('file', new Blob([bytes], { type: m }), name);
+    const r = await fetch(u, { method: 'POST', body: form, credentials: 'include' });
+    return r.text();
+  }, [url, b64, mime, filename]);
   if (typeof out !== 'string') throw new Error('上传中继无返回(标签页可能刚打开,请重试)');
   return out;
 }
@@ -363,8 +549,9 @@ async function uploadWithAccount(acc, srcUrl, pageUrl) {
 /** 右键二级菜单:有账号时直选账号上传;无账号时「检测账号并上传…」兜底 */
 const MP_COLLECT_ROOT = 'mopai-collect-root';
 const MP_COLLECT_AUTO = 'mopai-collect-auto';
+const MP_COLLECT_ACCOUNT_PREFIX = 'mopai-collect-account-';
 
-/** 重建右键菜单:有已知账号时只显示各账号子项;没有任何账号才显示「检测账号并上传…」兜底 */
+/** 重建右键菜单:缓存账号直选,保留手动重新检测入口 */
 function rebuildCollectMenu(accounts) {
   try {
     chrome.contextMenus.removeAll(() => {
@@ -374,18 +561,15 @@ function rebuildCollectMenu(accounts) {
         title: '采集图片到公众号素材库',
         contexts: ['image'],
       });
-      if (!list.length) {
+      chrome.contextMenus.create({
+        id: MP_COLLECT_AUTO,
+        parentId: MP_COLLECT_ROOT,
+        title: list.length ? '重新检测账号并上传…' : '检测账号并上传…',
+        contexts: ['image'],
+      });
+      list.forEach((acc) => {
         chrome.contextMenus.create({
-          id: MP_COLLECT_AUTO,
-          parentId: MP_COLLECT_ROOT,
-          title: '检测账号并上传…',
-          contexts: ['image'],
-        });
-        return;
-      }
-      list.forEach((acc, i) => {
-        chrome.contextMenus.create({
-          id: MP_COLLECT_ROOT + '-' + i,
+          id: MP_COLLECT_ACCOUNT_PREFIX + acc.token,
           parentId: MP_COLLECT_ROOT,
           title: `上传到「${acc.nick || '公众号'}」`,
           contexts: ['image'],
@@ -395,29 +579,64 @@ function rebuildCollectMenu(accounts) {
   } catch (e) { /* ignore */ }
 }
 
-/** 账号缓存:SW 启动即拉一次(节流 5 分钟),菜单子项直接展示账号;选择账号后离线上传 */
+/** 账号缓存持久化到 storage;SW 冷启动只恢复缓存和菜单,不主动请求微信 */
 let accCache = { accounts: [], ts: 0 };
+let accCacheLoaded = false;
+let accCacheLoadPromise = null;
+
+function ensureAccountCache() {
+  if (accCacheLoaded) return Promise.resolve(accCache.accounts);
+  if (!accCacheLoadPromise) {
+    accCacheLoadPromise = (async () => {
+      try {
+        const st = await chrome.storage.local.get(['mopai_mp_accounts', 'mopai_mp_accounts_ts']);
+        accCache = {
+          accounts: Array.isArray(st.mopai_mp_accounts)
+            ? st.mopai_mp_accounts.filter((a) => a && a.token)
+            : [],
+          ts: Number(st.mopai_mp_accounts_ts) || 0,
+        };
+      } catch (e) {
+        accCache = { accounts: [], ts: 0 };
+      }
+      accCacheLoaded = true;
+      rebuildCollectMenu(accCache.accounts);
+      return accCache.accounts;
+    })().finally(() => { accCacheLoadPromise = null; });
+  }
+  return accCacheLoadPromise;
+}
+
+async function saveAccountCache(accounts) {
+  accCache = {
+    accounts: (accounts || []).filter((a) => a && a.token),
+    ts: Date.now(),
+  };
+  accCacheLoaded = true;
+  rebuildCollectMenu(accCache.accounts);
+  try {
+    await chrome.storage.local.set({
+      mopai_mp_accounts: accCache.accounts,
+      mopai_mp_accounts_ts: accCache.ts,
+    });
+  } catch (e) {
+    console.warn('[collect] 账号缓存写入失败:', e);
+  }
+  return accCache.accounts;
+}
+
 async function getAccountsCached(force) {
+  await ensureAccountCache();
   if (!force && accCache.accounts.length && Date.now() - accCache.ts < 5 * 60000) return accCache.accounts;
   try {
     const { accounts } = await listMpAccounts();
-    accCache = { accounts: accounts.filter((a) => a && a.token), ts: Date.now() };
-    await chrome.storage.local.set({ mopai_mp_accounts: accCache.accounts });
-    rebuildCollectMenu(accCache.accounts);
-    return accCache.accounts;
+    return await saveAccountCache(accounts);
   } catch (e) {
-    if (!accCache.accounts.length) {
-      try {
-        const st = await chrome.storage.local.get('mopai_mp_accounts');
-        accCache.accounts = st.mopai_mp_accounts || [];
-      } catch (e2) { /* ignore */ }
-    }
-    accCache.ts = Date.now();
     rebuildCollectMenu(accCache.accounts);
     return accCache.accounts;
   }
 }
-getAccountsCached().catch(() => { /* SW 唤醒即预热账号缓存与菜单 */ });
+ensureAccountCache().catch(() => { /* SW 唤醒后从持久化缓存恢复菜单 */ });
 
 /** 页面内进度提示:右侧悬浮卡片(spinner/成功/失败),完成后自动消失。
  * 用 Web Animations API 做旋转(页面 CSP 禁 <style> 内联动画也不受影响)。 */
@@ -486,26 +705,24 @@ async function doCollect(acc, srcUrl, pageUrl, tabId) {
   if (r.ok) {
     const ok = shown ? await showCollectToast(tabId, 'success', `已采集到「${name}」素材库`) : false;
     if (!ok) await mpNotify('采集成功', `图片已上传到「${name}」素材库`);
-    getAccountsCached(true).catch(() => { /* 后台刷新缓存 */ });
   } else {
     const ok = shown ? await showCollectToast(tabId, 'error', '采集失败:' + r.error, r.detail) : false;
     if (!ok) await mpNotify('采集失败', r.error);
-    getAccountsCached(true).catch(() => { /* 刷新账号,让下次菜单准确 */ });
   }
 }
 
 chrome.contextMenus.onClicked.addListener((info, tab) => {
-  if (!String(info.menuItemId).startsWith(MP_COLLECT_ROOT) && info.menuItemId !== MP_COLLECT_AUTO) return;
+  const menuId = String(info.menuItemId);
+  if (menuId !== MP_COLLECT_AUTO && !menuId.startsWith(MP_COLLECT_ACCOUNT_PREFIX)) return;
   const srcUrl = info.srcUrl;
   const tabId = (tab && tab.id) || undefined;
   if (!srcUrl) { mpNotify('采集失败', '未获取到图片地址'); return; }
-  if (info.menuItemId === MP_COLLECT_AUTO) {
+  if (menuId === MP_COLLECT_AUTO) {
     (async () => {
       try {
         const accounts = await getAccountsCached(true);
         if (accounts.length === 1) return void doCollect(accounts[0], srcUrl, info.pageUrl, tabId);
         if (accounts.length > 1) {
-          // 多号且未点具体账号:打开选择窗兜底
           const params = '?src=' + encodeURIComponent(srcUrl) + '&page=' + encodeURIComponent(info.pageUrl || '');
           chrome.windows.create({ url: chrome.runtime.getURL('collector/collector.html') + params, type: 'popup', width: 440, height: 660 }).catch(() => { /* ignore */ });
           return;
@@ -517,11 +734,24 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
     })();
     return;
   }
-  // 二级菜单里点的具体账号
-  const idx = Number(String(info.menuItemId).split('-').pop());
-  const acc = accCache.accounts[idx];
-  if (!acc) { mpNotify('账号信息过期', '请右键重试,或先用「检测账号并上传」刷新'); return; }
-  doCollect(acc, srcUrl, info.pageUrl, tabId);
+  const token = menuId.slice(MP_COLLECT_ACCOUNT_PREFIX.length);
+  (async () => {
+    try {
+      let accounts = await ensureAccountCache();
+      let acc = accounts.find((a) => a.token === token);
+      if (!acc) {
+        accounts = await getAccountsCached(true);
+        acc = accounts.find((a) => a.token === token);
+      }
+      if (!acc) {
+        await mpNotify('账号信息过期', '请使用「重新检测账号并上传」刷新后重试');
+        return;
+      }
+      await doCollect(acc, srcUrl, info.pageUrl, tabId);
+    } catch (e) {
+      await mpNotify('采集失败', e.message || '账号缓存读取失败');
+    }
+  })();
 });
 
 // 选择器窗口的消息入口
