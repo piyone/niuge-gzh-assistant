@@ -74,15 +74,31 @@
 
     const fakeEditor = document.getElementById('fake-editor');
     window.__testIgnorePaste = false;
+    window.__testPasteMode = 'normal';
+    window.__testPasteDelay = 0;
+    window.__testPasteCount = 0;
     fakeEditor.addEventListener('paste', (e) => {
-      if (window.__testIgnorePaste || !e.clipboardData) {
+      window.__testPasteCount++;
+      const mode = window.__testPasteMode || (window.__testIgnorePaste ? 'ignore' : 'normal');
+      if (mode === 'ignore' || (mode === 'ignore-first' && window.__testPasteCount === 1) || !e.clipboardData) {
         e.preventDefault();
         return;
       }
-      const html = e.clipboardData.getData('text/html');
       e.preventDefault();
-      fakeEditor.innerHTML = html;
-      fakeEditor.dispatchEvent(new Event('input', { bubbles: true }));
+      const apply = () => {
+        const html = e.clipboardData.getData('text/html');
+        if (mode === 'append') {
+          fakeEditor.innerHTML += html;
+        } else {
+          const tmp = document.createElement('div');
+          tmp.innerHTML = html;
+          if (mode === 'sanitize') tmp.querySelectorAll('[style]').forEach((el) => el.removeAttribute('style'));
+          fakeEditor.innerHTML = tmp.innerHTML;
+        }
+        fakeEditor.dispatchEvent(new Event('input', { bubbles: true }));
+      };
+      if (window.__testPasteDelay) setTimeout(apply, window.__testPasteDelay);
+      else apply();
     });
 
     window.addEventListener('load', async () => {

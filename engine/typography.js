@@ -10,8 +10,9 @@ window.MoPaiTypo = (() => {
   const isCJK = (ch) => ch && CJK_RE.test(ch);
 
   /** 统计信息 */
-  function analyzeText(root) {
-    const text = (root.innerText || root.textContent || '').replace(/\u00a0/g, ' ');
+  function analyzeText(input) {
+    // 支持传字符串(调用方可先做隐藏节点剔除等预处理)
+    const text = (typeof input === 'string' ? input : (input.innerText || input.textContent || '')).replace(/\u00a0/g, ' ');
     const cjk = (text.match(new RegExp(`[${CJK}]`, 'g')) || []).length;
     const latinWords = (text.match(/[A-Za-z]+(?:['’-][A-Za-z]+)?/g) || []).length;
     const digits = (text.match(/\d+/g) || []).length;

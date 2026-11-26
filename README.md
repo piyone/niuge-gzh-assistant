@@ -122,7 +122,7 @@ Markdown 一键导入 · 中文排版规范 · 外链脚注化 · 违禁词检�
 
 - **Manifest V3** 无构建步骤,纯静态文件;后台 Service Worker
 - 渲染管线:`marked`(GFM)→ `DOMPurify` 消毒 → 中文排版规范 → `highlight.js` 高亮内联化 → 主题样式全量写入 `style` 属性(公众号保存后唯一存活的样式方式)
-- 编辑器注入:模拟键盘全选 → 等待 ProseMirror 选区同步 → 合成 paste → 长度比对防重复 → 自动撤销重试
+- 编辑器注入:多通道全选并校验选区 → 合成 paste → 按内容/媒体/样式分级校验 → 现代编辑器重试或旧编辑器 `execCommand` 降级 → 半成功保留快照并提示恢复
 - 图片采集:页面中继(`chrome.scripting`)同源请求绕过环境校验;OffscreenCanvas 格式归一化;DNR 临时 Referer 规则破防盗链
 - AI 请求经后台 SW 代理规避 CORS;平台同步复用浏览器 Cookie,受限请求头经 `declarativeNetRequest` 会话规则注入
 - 引擎函数全部纯函数化(`engine/`),无 chrome 依赖,jsdom 可测

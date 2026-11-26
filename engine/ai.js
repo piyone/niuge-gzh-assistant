@@ -46,11 +46,12 @@ globalThis.MoPaiAI = (() => {
   }
 
   function buildMessages(chunk) {
-    const system = '你是严谨的中文校对编辑。检查用户给出的文章片段,只报告【有客观证据的错误】,宁缺毋滥:\n' +
-      '1. typo:仅限 错别字(音近/形近)、词语重复、明显多字漏字。产品型号、序列号、版本号、人名、缩写即使看起来奇怪也不是错误;\n' +
-      '2. fluency:仅限明显语病(搭配错误、成分残缺)。口语化表达、语气词(吧/啊/哈)、反问、感叹都是作者风格,不是语病,禁止改写;\n' +
-      '3. punct:仅限中英文标点混用、成对标点缺失。\n' +
-      '禁止事项(违反即无效):\n- 禁止改写整句或调整语序;\n- 禁止增删语气词/感叹号/问号来"优化"表达;\n- 禁止把正确但少见的写法当错误;\n- 禁止提出润色、风格、更通顺类的建议。\n' +
+    const system = '你是严谨的中文校对编辑。只检查两类错误,宁缺毋滥:\n' +
+      '1. typo:仅限错别字(音近/形近)、词语重复、明显多字漏字。产品型号、序列号、版本号、人名、缩写、中英数字混排(如 smart 精灵 #2 BRABUS 版)即使看起来奇怪也不是错误;\n' +
+      '2. fluency:仅限明显语病(搭配错误、成分残缺)。口语化表达、语气词(吧/啊/哈)、反问、感叹、短句风格都是作者风格,不是语病,禁止改写。\n' +
+      '禁止事项(违反即无效):\n' +
+      '- 禁止报告任何标点问题:不检查句号/逗号有无,禁止建议增删标点或空格;标题、列表条目、以符号开头的短行不带句号是正常写法;\n' +
+      '- 禁止改写整句或调整语序;\n- 禁止把正确但少见的写法当错误;\n- 禁止提出润色、风格、更通顺类的建议。\n' +
       '硬性规则:\n- original 必须是原文中【逐字连续出现】的片段,长度不超过 20 字;\n' +
       '- suggestion 与 original 的差异必须很小(只改动错处本身);\n- reason 不超过 15 字;\n' +
       '- 没有确定错误必须输出 []。宁可漏报,不可误报。\n' +
@@ -111,8 +112,12 @@ globalThis.MoPaiAI = (() => {
       if (!original || !suggestion) continue;
       if (original === suggestion) continue;
       if (original.length > 40) continue;
+      // 双重过滤:模型仍返回标点类问题,或建议只是增删标点/空白(差异不涉及文字)时一律丢弃
+      const bare = (s) => s.replace(/[\s\u3000。.,,、;:!!??…「」『』"'"'()()《》<>【】[\]—·•△▲●○■□#/\\]/g, '');
+      if (bare(original) === bare(suggestion)) continue;
+      if (it.type === 'punct') continue;
       valid.push({
-        type: ['typo', 'fluency', 'punct'].includes(it.type) ? it.type : 'fluency',
+        type: ['typo', 'fluency'].includes(it.type) ? it.type : 'fluency',
         original,
         suggestion,
         reason: String(it.reason || '').slice(0, 40),

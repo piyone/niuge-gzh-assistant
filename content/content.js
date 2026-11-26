@@ -227,13 +227,47 @@ await mopai.inject(article.html); // 直接注入公众号编辑器
     }
   }
 
+  function pressUndo(ed) {
+    try {
+      const mac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent || '');
+      const view = (ed.ownerDocument && ed.ownerDocument !== document && ed.ownerDocument.defaultView) || window;
+      ed.dispatchEvent(new view.KeyboardEvent('keydown', {
+        key: 'z', code: 'KeyZ', keyCode: 90, which: 90,
+        bubbles: true, cancelable: true,
+        ...(mac ? { metaKey: true } : { ctrlKey: true }),
+      }));
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  function selectionCoversEditor(ed) {
+    try {
+      const doc = ed.ownerDocument || document;
+      const win = doc.defaultView || window;
+      const sel = win.getSelection();
+      if (!sel || !sel.rangeCount) return false;
+      const actual = sel.getRangeAt(0);
+      const expected = doc.createRange();
+      expected.selectNodeContents(ed);
+      return actual.startContainer === expected.startContainer &&
+        actual.startOffset === expected.startOffset &&
+        actual.endContainer === expected.endContainer &&
+        actual.endOffset === expected.endOffset;
+    } catch (e) {
+      return false;
+    }
+  }
+
   /** 在编辑器内全选内容(等价手动 Ctrl+A;兼容 iframe 内编辑器) */
   function selectAllInEditor(ed) {
     const doc = ed.ownerDocument || document;
     ed.focus();
-    // 1) 键盘事件路径:ProseMirror 等编辑器拦截 keydown,内部选区直接变全选
     pressSelectAll(ed);
-    // 2) DOM Range 全选(selectionchange 后会被同步为内部全选)
+    try {
+      if (typeof doc.execCommand === 'function') doc.execCommand('selectAll');
+    } catch (e) { /* 继续用 DOM Range */ }
     try {
       const win = doc.defaultView || window;
       const sel = win.getSelection();
@@ -241,10 +275,18 @@ await mopai.inject(article.html); // 直接注入公众号编辑器
       range.selectNodeContents(ed);
       sel.removeAllRanges();
       sel.addRange(range);
-      return true;
+      return selectionCoversEditor(ed);
     } catch (e) {
       return false;
     }
+  }
+
+  async function waitForEditorSelection(ed, timeout = 600) {
+    const deadline = Date.now() + timeout;
+    while (!selectionCoversEditor(ed) && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 30));
+    }
+    return selectionCoversEditor(ed);
   }
 
   const INJECTION_STYLE_PROPS = [
@@ -290,19 +332,30 @@ await mopai.inject(article.html); // 直接注入公众号编辑器
     };
   }
 
-  function injectionMatches(ed, expected) {
+  function getInjectionStatus(ed, expected) {
     const text = normalizedInjectionText(ed.innerText || ed.textContent);
     const afterStyles = collectInjectionStyles(ed);
-    return text === expected.text &&
-      injectionMediaCount(ed) === expected.media &&
-      Array.from(expected.styles).every(([signature, count]) => (afterStyles.get(signature) || 0) >= count);
+    let styleLoss = 0;
+    expected.styles.forEach((count, signature) => {
+      styleLoss += Math.max(0, count - (afterStyles.get(signature) || 0));
+    });
+    return {
+      content: text === expected.text && injectionMediaCount(ed) === expected.media,
+      styles: styleLoss === 0,
+      styleLoss,
+    };
+  }
+
+  function injectionWaitTimeout(expected) {
+    return Math.min(6000, 1200 + expected.media * 500 + Math.floor(expected.text.length / 2000) * 500);
   }
 
   async function waitForInjection(ed, expected) {
-    const deadline = Date.now() + 900;
+    const deadline = Date.now() + injectionWaitTimeout(expected);
     while (true) {
-      if (injectionMatches(ed, expected)) return true;
-      if (Date.now() >= deadline) return false;
+      const status = getInjectionStatus(ed, expected);
+      if (status.content) return status;
+      if (Date.now() >= deadline) return status;
       await new Promise((resolve) => setTimeout(resolve, 50));
     }
   }
@@ -345,21 +398,47 @@ await mopai.inject(article.html); // 直接注入公众号编辑器
 
   let injecting = false;
 
-  /** 通过编辑器输入通道整篇替换,并校验文字、媒体数量和关键样式是否真正写入。 */
+  /** 通过编辑器输入通道整篇替换;内容写入即成功,样式清洗单独警告。 */
   async function injectHtml(html) {
-    if (injecting) return { ok: false, reason: '正在写入编辑器,请稍后再试' };
+    if (injecting) return { ok: false, reason: '正在写入编辑器,请稍后再试', manual: false, changed: false };
     const ed = findEditor();
-    if (!ed) return { ok: false, reason: '未找到编辑器' };
+    if (!ed) return { ok: false, reason: '未找到编辑器', manual: false, changed: false };
     const doc = ed.ownerDocument || document;
     const view = (doc !== document && doc.defaultView) || window;
     const expected = createInjectionExpectation(html, doc);
     const beforeHtml = ed.innerHTML;
-    const failed = (reason) => ({
+    const beforeStatus = getInjectionStatus(ed, expected);
+    const changed = () => ed.innerHTML !== beforeHtml;
+    const partialFailure = () => ({
+      ok: false,
+      reason: '内容已发生变化但未完整替换,请恢复快照后重试',
+      manual: false,
+      changed: true,
+      partial: true,
+    });
+    const manualFailure = (reason) => ({
       ok: false,
       reason,
       manual: true,
-      changed: ed.innerHTML !== beforeHtml,
+      changed: false,
     });
+    const evaluate = (status) => {
+      if (status.content && changed()) {
+        // 样式损失阈值:缺失 <3 处或占比 <10% 视为编辑器正常清洗噪音,不打扰用户
+        const totalStyles = [...expected.styles.values()].reduce((a, b) => a + b, 0);
+        const lossy = status.styleLoss >= 3 && status.styleLoss >= Math.ceil(totalStyles * 0.1);
+        return {
+          ok: true,
+          changed: true,
+          styleLoss: status.styleLoss,
+          warning: lossy ? '正文已写入,但微信清洗了部分内联样式,建议预览确认' : '',
+        };
+      }
+      if (!changed() && beforeStatus.content && beforeStatus.styles) {
+        return { ok: true, via: 'noop', changed: false, unchanged: true, styleLoss: 0, warning: '' };
+      }
+      return null;
+    };
 
     const dispatchPaste = () => {
       try {
@@ -372,26 +451,46 @@ await mopai.inject(article.html); // 直接注入公众号编辑器
       } catch (e) { return false; }
     };
 
-    injecting = true;
-    try {
+    const pasteAttempt = async (selectionDelay) => {
       ed.focus();
       selectAllInEditor(ed);
-      await new Promise((resolve) => setTimeout(resolve, 120));
+      await waitForEditorSelection(ed);
+      if (!selectionCoversEditor(ed)) selectAllInEditor(ed);
+      await new Promise((resolve) => setTimeout(resolve, selectionDelay));
+      if (!dispatchPaste()) return { dispatched: false, status: getInjectionStatus(ed, expected) };
+      return { dispatched: true, status: await waitForInjection(ed, expected) };
+    };
 
-      if (dispatchPaste()) {
-        if (await waitForInjection(ed, expected)) return { ok: true, via: 'paste' };
-        return failed('编辑器未接受内容或样式,请使用「复制排版结果」后手动粘贴');
-      }
+    injecting = true;
+    try {
+      const modern = isModernEditor(ed);
+      let attempt = await pasteAttempt(140);
+      let result = evaluate(attempt.status);
+      if (result) return { ...result, via: result.via || 'paste' };
+      if (changed()) return partialFailure();
 
-      if (isModernEditor(ed)) {
-        return failed('当前编辑器未接受自动粘贴,请复制后手动粘贴');
+      if (modern) {
+        attempt = await pasteAttempt(420);
+        result = evaluate(attempt.status);
+        if (result) return { ...result, via: result.via || 'paste-retry' };
+        if (changed()) return partialFailure();
+        return manualFailure('当前编辑器未接受自动粘贴,请使用「复制排版结果」后手动粘贴');
       }
 
       if (typeof doc.execCommand === 'function') {
         try {
+          ed.focus();
+          selectAllInEditor(ed);
+          await waitForEditorSelection(ed);
           const inserted = doc.execCommand('insertHTML', false, html);
-          if (inserted && await waitForInjection(ed, expected)) return { ok: true, via: 'execCommand' };
+          if (inserted || changed()) {
+            const status = await waitForInjection(ed, expected);
+            result = evaluate(status);
+            if (result) return { ...result, via: result.via || 'execCommand' };
+          }
+          if (changed()) return partialFailure();
         } catch (e) { /* 继续兼容旧编辑器 */ }
+        if (changed()) return partialFailure();
       }
 
       // 仅老版 iframe 编辑器可以承受直接 DOM 写入;ProseMirror/通用 contenteditable 不直改。
@@ -399,10 +498,13 @@ await mopai.inject(article.html); // 直接注入公众号编辑器
         ed.innerHTML = html;
         const InputCtor = view.InputEvent || Event;
         ed.dispatchEvent(new InputCtor('input', { bubbles: true }));
-        if (await waitForInjection(ed, expected)) return { ok: true, via: 'dom' };
+        const status = await waitForInjection(ed, expected);
+        result = evaluate(status);
+        if (result) return { ...result, via: result.via || 'dom' };
+        if (changed()) return partialFailure();
       }
 
-      return failed('自动写入失败,请使用「复制排版结果」后手动粘贴');
+      return manualFailure('自动写入失败,请使用「复制排版结果」后手动粘贴');
     } finally {
       injecting = false;
     }
@@ -718,7 +820,7 @@ await mopai.inject(article.html); // 直接注入公众号编辑器
       document.body.appendChild(t);
     }
     t.textContent = msg;
-    t.className = 'mopai-toast show' + (type === 'err' ? ' err' : '');
+    t.className = 'mopai-toast show' + (type === 'err' ? ' err' : type === 'warn' ? ' warn' : '');
     clearTimeout(toast._timer);
     toast._timer = setTimeout(() => t.classList.remove('show'), 2600);
   }
@@ -851,9 +953,9 @@ await mopai.inject(article.html); // 直接注入公众号编辑器
 
   const NIU_MARK_IMG = `<img src="${chrome.runtime.getURL('icons/icon128-v6.png')}" alt="">`;
   const TOOLBAR_ACTIONS = [
-    { id: 'format', label: '排版', title: '牛哥 · 一键规范排版' },
+    { id: 'format', label: '一键排版', title: '牛哥 · 一键规范排版并套用主题(直接执行,不打开面板)' },
     { id: 'proof', label: 'AI 校对', title: '牛哥 · AI 校对' },
-    { id: 'rules', label: '体检', title: '牛哥 · 发布前规则体检' },
+    { id: 'rules', label: '文章体检', title: '牛哥 · 发布前规则体检' },
   ];
 
   const TABS = [
@@ -1103,12 +1205,35 @@ await mopai.inject(article.html); // 直接注入公众号编辑器
     renderTab(tab);
   }
 
-  function runToolbarAction(action) {
-    if (action === 'format') {
-      openPanelTab('format');
-      panelEl.querySelector('[data-act="fmt-all"]')?.click();
-      return;
+  /** 一键排版核心管线(顶部工具栏与面板「一键规范排版」共用):快照 → 规范 → 套主题 → 注入编辑器 */
+  async function runFormatAll() {
+    const src = getEditorRoot();
+    if (!src) { toast('未找到编辑器', 'err'); return null; }
+    await saveSnapshot(src.innerHTML);
+    await pushSnapshotHistory(src.innerHTML);
+    const o = {
+      padSpaces: settings.rules.pad, punct: true, blank: true, footnote: true,
+      ellipsis: settings.rules.ellipsis !== false,
+      collapse: settings.rules.collapse === true,
+      vars: window.MoPaiThemes.getTheme(settings.theme).vars,
+    };
+    const rep = window.MoPaiTypo.normalizeExisting(src, o);
+    window.MoPaiRender.themeExisting(src, settings.theme, fmtThemeOverrides());
+    const r = await injectHtml(src.innerHTML);
+    if (!r.ok) {
+      if (r.changed) { toast('排版失败:内容未完整写入,请「恢复快照」后重试', 'err'); return { rep, r }; }
+      const copied = await copyRichHtml(src.innerHTML);
+      toast(copied ? '排版失败,结果已复制到剪贴板,请到编辑器粘贴' : '排版失败,请重试或用「复制排版结果」手动粘贴', 'err');
+      return { rep, r };
     }
+    if (r.warning) toast(`排版成功,注意:${r.warning}`, 'warn');
+    else toast(r.unchanged ? '内容已符合排版规范,无改动 ✅' : '排版成功 ✅');
+    return { rep, r };
+  }
+
+  function runToolbarAction(action) {
+    // 顶部「一键排版」:不打开面板,直接在编辑器里执行
+    if (action === 'format') { runFormatAll(); return; }
     if (action !== 'proof' && action !== 'rules') return;
     checkMode = action === 'proof' ? 'proof' : 'rules';
     openPanelTab('check');
@@ -1265,13 +1390,16 @@ await mopai.inject(article.html); // 直接注入公众号编辑器
         await saveSnapshot(cur ? cur.innerHTML : '');
         const r = await injectHtml(lastMdHtml);
         if (r.ok) {
-          toast(r.via === 'paste' ? '已注入编辑器 ✅' : '已注入(兼容模式),请检查内容');
+          if (r.warning) toast(`导入成功,注意:${r.warning}`, 'warn');
+          else toast(r.unchanged ? '导入完成,内容未变化 ✅' : '导入成功 ✅');
           lastMdHtml = '';
           ta.value = '';
           preview.innerHTML = '';
+        } else if (r.changed) {
+          toast('导入失败:内容未完整写入,请「排版 → 恢复快照」后重试', 'err');
         } else {
-          toast(r.reason + ',已复制到剪贴板,请手动粘贴', 'err');
-          await copyRich(lastMdHtml, ta.value);
+          const copied = await copyRich(lastMdHtml, ta.value);
+          toast(copied ? '导入失败,内容已复制到剪贴板,请到编辑器粘贴' : `导入失败:${r.reason}`, 'err');
         }
       }
     });
@@ -1384,8 +1512,13 @@ await mopai.inject(article.html); // 直接注入公众号编辑器
         const html = window.MoPaiRender.themeExisting(srcT, settings.theme, fmtThemeOverrides());
         const r = await injectHtml(html);
         refreshPreview();
-        if (!r.ok) return toast(`${r.reason}(注入前已存快照)`, 'err');
-        toast(`已套用「${themeName()}」主题 ✅(注入前已存快照)`);
+        if (!r.ok) {
+          if (r.changed) return toast('排版失败:内容未完整写入,可「恢复快照」回滚', 'err');
+          const copied = await copyRichHtml(html);
+          return toast(copied ? '排版失败,结果已复制到剪贴板,请到编辑器粘贴' : `排版失败:${r.reason}`, 'err');
+        }
+        if (r.warning) return toast(`排版成功,注意:${r.warning}`, 'warn');
+        toast(`「${themeName()}」主题排版成功 ✅`);
         return;
       }
 
@@ -1412,7 +1545,9 @@ await mopai.inject(article.html); // 直接注入公众号编辑器
         const cur = getEditorRoot();
         if (cur) await saveSnapshot(cur.innerHTML);
         const r = await injectHtml(snap.html);
-        toast(r.ok ? '已从历史快照恢复 ✅' : '恢复失败', r.ok ? undefined : 'err');
+        if (!r.ok) return toast(r.changed ? `${r.reason}(恢复前内容已留档)` : '恢复失败,请重试', 'err');
+        if (r.warning) return toast(`已从历史快照恢复 ⚠️ ${r.warning}`, 'warn');
+        toast('已从历史快照恢复 ✅');
         return;
       }
 
@@ -1422,7 +1557,9 @@ await mopai.inject(article.html); // 直接注入公众号编辑器
         const cur = getEditorRoot();
         if (cur) await saveSnapshot(cur.innerHTML);
         const r = await injectHtml(snap.html);
-        toast(r.ok ? `已恢复 ${new Date(snap.ts).toLocaleTimeString()} 的快照` : '恢复失败', r.ok ? undefined : 'err');
+        if (!r.ok) return toast(r.changed ? `${r.reason}(恢复前内容已留档)` : '恢复失败,请重试', 'err');
+        if (r.warning) return toast(`已恢复 ${new Date(snap.ts).toLocaleTimeString()} 的快照 ⚠️ ${r.warning}`, 'warn');
+        toast(`已恢复 ${new Date(snap.ts).toLocaleTimeString()} 的快照`);
         return;
       }
 
@@ -1436,28 +1573,36 @@ await mopai.inject(article.html); // 直接注入公众号编辑器
         return;
       }
 
+      // 一键规范排版:与顶部「一键排版」按钮共用同一条管线
+      if (act === 'fmt-all') {
+        const out = await runFormatAll();
+        if (out && out.r.ok) {
+          const warning = out.r.warning ? ` ⚠️ ${out.r.warning}` : '';
+          report.innerHTML = `✅ 排版成功:${out.rep.headings} 个小标题识别 · ${out.rep.spaces} 处文字规范 · ${out.rep.ellipsis} 处省略号 · ${out.rep.collapsed} 处标点收敛 · ${out.rep.blanks} 个空段清理 · ${out.rep.footnotes} 条外链脚注化${warning}`;
+        }
+        return;
+      }
+
       await saveSnapshot(src.innerHTML);
       await pushSnapshotHistory(src.innerHTML);
       const o = {
-        padSpaces: act === 'fmt-all' || act === 'fmt-space' ? settings.rules.pad : false,
-        punct: act === 'fmt-all' || act === 'fmt-space',
-        blank: act === 'fmt-all' || act === 'fmt-blank',
-        footnote: act === 'fmt-all' || act === 'fmt-footnote',
-        ellipsis: act === 'fmt-all' || act === 'fmt-space' ? settings.rules.ellipsis !== false : false,
-        collapse: act === 'fmt-all' && settings.rules.collapse === true,
+        padSpaces: act === 'fmt-space' ? settings.rules.pad : false,
+        punct: act === 'fmt-space',
+        blank: act === 'fmt-blank',
+        footnote: act === 'fmt-footnote',
+        ellipsis: act === 'fmt-space' ? settings.rules.ellipsis !== false : false,
         vars: window.MoPaiThemes.getTheme(settings.theme).vars,
       };
-      // ProseMirror 内核不接受外部 DOM 直改(会被内部状态还原),
-      // 故克隆 → 排版处理 → 全选粘贴整篇替换(injectHtml 内已用 execCommand('selectAll') 同步内部选区,不会重复)
+      // ProseMirror 内核不接受外部 DOM 直改(会被内部状态还原),故走全选粘贴整篇替换。
       const rep = window.MoPaiTypo.normalizeExisting(src, o);
-      if (act === 'fmt-all') {
-        window.MoPaiRender.themeExisting(src, settings.theme, fmtThemeOverrides());
-      }
       const r = await injectHtml(src.innerHTML);
-      report.innerHTML = !r.ok
-        ? `写入编辑器失败:${r.reason}(快照已留档)`
-        : `✅ 排版成功:${rep.headings} 个小标题识别 · ${rep.spaces} 处文字规范 · ${rep.ellipsis} 处省略号 · ${rep.collapsed} 处标点收敛 · ${rep.blanks} 个空段清理 · ${rep.footnotes} 条外链脚注化`;
-      toast(r.ok ? '排版成功 ✅' : '写入失败,请按提示手动粘贴', r.ok ? undefined : 'err');
+      if (!r.ok) {
+        report.innerHTML = `写入编辑器失败:${r.reason}(快照已留档)`;
+        if (r.changed) return toast('排版失败:内容未完整写入,请「恢复快照」后重试', 'err');
+        const copied = await copyRichHtml(src.innerHTML);
+        return toast(copied ? '排版失败,结果已复制到剪贴板,请到编辑器粘贴' : '排版失败,请重试或用「复制排版结果」手动粘贴', 'err');
+      }
+      report.innerHTML = `✅ 已完成:${rep.headings || rep.spaces || rep.blanks || rep.footnotes || 0} 处调整`;
     });
 
     // 主题预览与字号/行距联动
@@ -1573,6 +1718,7 @@ await mopai.inject(article.html); // 直接注入公众号编辑器
     const work = p.querySelector('#mopai-ai-work');
     work.innerHTML = '';
     const q = document.createElement('div');
+    q.className = 'mopai-subpane'; // 与主面板一致的分栏间距
     work.appendChild(q);
     if (aiMode === 'title') renderTitleMode(q);
     else if (aiMode === 'summary') renderSummaryMode(q);
@@ -1610,13 +1756,18 @@ await mopai.inject(article.html); // 直接注入公众号编辑器
 
   // ----- AI 校对(现位于「检查」标签) -----
 
+  // 校对运行期状态(面板级):切模式/切 tab 重渲染不会丢,后台循环持续推进,切回即恢复进度与结果。
+  // text/finished 用于结果复用:内容没变时重复点击直接展示上次结果,不重复请求;
+  // gen 为代次守卫:重新发起后,旧循环的返回结果直接丢弃,不会覆盖新状态。
+  const PROOF_RUN = { running: false, cancelled: false, finished: false, text: '', gen: 0, issues: [], statusText: '', barPct: 0, summaryHtml: '', ui: null };
+
   function renderProofMode(q) {
     const st = getAiStatus();
     q.innerHTML = `
       ${aiStatusHtml(st)}
-      <div class="mopai-report">AI 校对检查 <b>错别字、语句不通顺、标点误用</b>。长文自动分段连续校对,建议先「排版 → 一键规范」再校对。</div>
+      <div class="mopai-report">AI 校对只检查 <b>错别字、语句不通顺</b>,标点与写作风格不干预。长文自动分段连续校对,建议先「一键排版」再校对。</div>
       <div class="mopai-row">
-        <button class="mopai-btn primary" data-act="ai-run" ${st.ok ? '' : 'disabled title="请先配置 AI 模型"'}>🔍 开始 AI 校对</button>
+        <button class="mopai-btn primary" data-act="ai-run" ${st.ok ? '' : 'disabled title="请先配置 AI 模型"'}><span class="mopai-btn-ico">🔍</span> 开始 AI 校对</button>
         <button class="mopai-btn ghost" data-act="ai-stop" hidden>■ 停止</button>
         <button class="mopai-btn ghost" data-act="ai-apply-all" hidden>✔ 全部应用</button>
       </div>
@@ -1635,11 +1786,11 @@ await mopai.inject(article.html); // 直接注入公众号编辑器
     const list = q.querySelector('#mopai-ai-list');
     const stopBtn = q.querySelector('[data-act="ai-stop"]');
     const applyAllBtn = q.querySelector('[data-act="ai-apply-all"]');
-    let issues = [];
+    const runBtn = q.querySelector('[data-act="ai-run"]');
 
     const renderIssues = () => {
-      if (!issues.length) { list.innerHTML = '<div class="mopai-empty">没有发现需要修改的地方 ✅</div>'; return; }
-      list.innerHTML = issues.map((it, i) => {
+      if (!PROOF_RUN.issues.length) { list.innerHTML = '<div class="mopai-empty">没有发现需要修改的地方 ✅</div>'; return; }
+      list.innerHTML = PROOF_RUN.issues.map((it, i) => {
         const meta = AI_TYPE_META[it.type] || AI_TYPE_META.fluency;
         return `<div class="mopai-ai-item">
           <span class="mopai-ai-badge ${meta.cls}">${meta.label}</span>
@@ -1652,13 +1803,55 @@ await mopai.inject(article.html); // 直接注入公众号编辑器
             : `<span class="mopai-ai-actions"><button class="mopai-btn" data-ai-apply="${i}">应用</button></span>`}
         </div>`;
       }).join('');
-      applyAllBtn.hidden = issues.every((it) => it.applied);
+      applyAllBtn.hidden = PROOF_RUN.issues.every((it) => it.applied);
     };
+
+    // UI 挂钩:后台循环只更新状态,经 ui 同步到当前 DOM;切走后旧元素失效也无碍,切回时重挂并恢复
+    PROOF_RUN.ui = { prog, bar, statusEl, summary, list, stopBtn, applyAllBtn, runBtn, renderIssues };
+
+    const setRunBtn = (busy) => {
+      // 始终恢复"当前渲染"的按钮:循环结束时若用户已切走再切回,旧引用的恢复会漏掉新按钮
+      const rb = (PROOF_RUN.ui && PROOF_RUN.ui.runBtn) || runBtn;
+      if (!rb) return;
+      rb.classList.toggle('loading', busy);
+      if (busy) rb.setAttribute('disabled', '');
+      else rb.removeAttribute('disabled');
+      rb.innerHTML = busy
+        ? '<span class="mopai-btn-ico">🔍</span> 校对中…'
+        : '<span class="mopai-btn-ico">🔍</span> 开始 AI 校对';
+    };
+    const setStatus = (t) => { PROOF_RUN.statusText = t; if (PROOF_RUN.ui?.statusEl) PROOF_RUN.ui.statusEl.textContent = t; };
+
+    // 停止按钮在渲染期统一绑定:切走再切回后依然有效。
+    // 立即恢复按钮并放行新校对;当前批次请求无法强制中断,后台旧循环经代次守卫静默退出。
+    stopBtn.onclick = () => {
+      PROOF_RUN.cancelled = true;
+      PROOF_RUN.running = false;
+      stopBtn.hidden = true;
+      setStatus('已停止');
+      setRunBtn(false);
+    };
+
+    // 恢复视图:校对进行中 → 续显进度;已有结果 → 直接展示,无需重新校对
+    if (PROOF_RUN.running) {
+      setRunBtn(true);
+      prog.hidden = false;
+      bar.style.width = PROOF_RUN.barPct + '%';
+      setStatus(PROOF_RUN.statusText || 'AI 正在逐字校对全文…');
+      summary.hidden = false;
+      summary.innerHTML = PROOF_RUN.summaryHtml;
+      list.innerHTML = '<div class="mopai-empty">校对进行中,切换视图不会中断 ✅</div>';
+      stopBtn.hidden = false;
+    } else if (PROOF_RUN.issues.length) {
+      summary.hidden = false;
+      summary.innerHTML = PROOF_RUN.summaryHtml;
+      renderIssues();
+    }
 
     const countdown = async (sec, label) => {
       for (let s = sec; s > 0; s--) {
-        statusEl.textContent = `${label} ${s}s`;
-        if (stopBtn && !stopBtn.hidden) await new Promise((r) => setTimeout(r, 1000));
+        setStatus(`${label} ${s}s`);
+        if (PROOF_RUN.ui?.stopBtn && !PROOF_RUN.ui.stopBtn.hidden) await new Promise((r) => setTimeout(r, 1000));
         else return false;
       }
       return true;
@@ -1676,68 +1869,104 @@ await mopai.inject(article.html); // 直接注入公众号编辑器
       const text = getEditorTextForAI();
       if (text.length < 10) return toast('正文太短,无需校对', 'err');
 
+      // 内容未变化且上轮已有结果:直接复用,不重复请求
+      if (PROOF_RUN.finished && PROOF_RUN.text === text) {
+        prog.hidden = true;
+        summary.hidden = false;
+        summary.innerHTML = PROOF_RUN.summaryHtml;
+        renderIssues();
+        toast('内容未变化,已复用上次校对结果');
+        return;
+      }
+      // 防并发:仅拦截"上一轮仍在跑且未点停止"的重复点击
+      if (PROOF_RUN.running) return toast('校对正在进行中', 'warn');
+
+      const gen = ++PROOF_RUN.gen; // 代次:旧循环返回的结果直接丢弃
+      PROOF_RUN.text = text;
+
       const chunks = window.MoPaiAI.chunkArticle(text);
       console.log('[牛哥] AI校对:全文', text.length, '字,分', chunks.length, '批,各批字数', chunks.map((c) => c.length).join('/'));
-      issues = [];
-      prog.hidden = false;
-      stopBtn.hidden = false;
-      // 诊断信息常驻:全文量与分块数一眼可见(分块=1 说明提取异常,分块>1 逐块推进)
+      PROOF_RUN.issues = [];
+      PROOF_RUN.cancelled = false;
+      PROOF_RUN.running = true;
+      let doneBatches = 0;
+      PROOF_RUN.summaryHtml = `📄 全文 ${text.length} 字${chunks.length > 1 ? ` · 分 ${chunks.length} 批校对` : ''}`;
+      setRunBtn(true);
       summary.hidden = false;
-      summary.innerHTML = `📄 全文 ${text.length} 字${chunks.length > 1 ? ` · 分 ${chunks.length} 批校对` : ''}`;
+      summary.innerHTML = PROOF_RUN.summaryHtml;
+      prog.hidden = false;
       list.innerHTML = '';
-      let cancelled = false;
-      stopBtn.onclick = () => { cancelled = true; stopBtn.hidden = true; statusEl.textContent = '已停止'; };
+      stopBtn.hidden = false;
+      try {
+        for (let ci = 0; ci < chunks.length; ci++) {
+          const pct = Math.round((ci / chunks.length) * 100);
+          PROOF_RUN.barPct = pct;
+          setStatus(chunks.length > 1 ? `AI 正在逐批校对全文(${ci + 1}/${chunks.length})…` : 'AI 正在逐字校对全文…');
+          if (PROOF_RUN.ui?.bar) PROOF_RUN.ui.bar.style.width = pct + '%';
 
-      for (let ci = 0; ci < chunks.length; ci++) {
-        bar.style.width = Math.round((ci / chunks.length) * 100) + '%';
-        statusEl.textContent = chunks.length > 1
-          ? `AI 正在逐批校对全文(${ci + 1}/${chunks.length})…`
-          : 'AI 正在逐字校对全文…';
-
-        let attempt = 0, res = null;
-        while (attempt < 3) {
-          res = await sendBg('mopai-ai-chunk', { messages: window.MoPaiAI.buildMessages(chunks[ci]) });
-          if (res.ok) break;
-          if (res.rateLimited) {
-            if (!(await countdown(res.retryAfter || 60, '平台限流,等待'))) { cancelled = true; break; }
-            attempt++;
-            continue;
+          let attempt = 0, res = null;
+          while (attempt < 3) {
+            res = await sendBg('mopai-ai-chunk', { messages: window.MoPaiAI.buildMessages(chunks[ci]) });
+            if (res.ok) break;
+            if (res.rateLimited) {
+              if (!(await countdown(res.retryAfter || 60, '平台限流,等待'))) { PROOF_RUN.cancelled = true; break; }
+              attempt++;
+              continue;
+            }
+            break;
           }
-          break;
+          if (PROOF_RUN.gen !== gen) return; // 已被新一轮校对取代:旧循环静默退出,不写任何状态
+          if (PROOF_RUN.cancelled) break;
+          if (!res.ok) {
+            setStatus('出错');
+            stopBtn.hidden = true;
+            PROOF_RUN.summaryHtml = `❌ ${esc(res.error || '未知错误')}${chunks.length > 1 ? '(已完成批次的结果保留)' : ''}`;
+            list.innerHTML = `<div class="mopai-ai-item err">❌ ${esc(res.error || '未知错误')}${chunks.length > 1 ? '(已完成批次的结果保留)' : ''}</div>`;
+            return;
+          }
+          const parsed = window.MoPaiAI.parseAiResponse(res.raw);
+          if (parsed.error) {
+            list.innerHTML = `<div class="mopai-ai-item err">❌ ${esc(parsed.error)}</div>`;
+            if (chunks.length === 1) { setStatus('完成(解析失败)'); stopBtn.hidden = true; return; }
+          }
+          // 硬过滤:original 在正文中逐字找不到的(模型幻觉)直接丢弃,不展示
+          const fullText = (getEditorRoot() ? getEditorRoot().innerText || '' : '').replace(/\u00a0/g, ' ');
+          const kept = parsed.issues.filter((it) => it.original && fullText.includes(it.original));
+          PROOF_RUN.issues = PROOF_RUN.issues.concat(kept);
+          doneBatches = ci + 1;
+          // 非最后一段:短间隔续跑,避免请求重叠;仅当服务端返回 429 时才按其指示倒计时
+          if (ci < chunks.length - 1) {
+            await new Promise((r) => setTimeout(r, 800));
+          }
         }
-        if (cancelled) break;
-        if (!res.ok) {
-          statusEl.textContent = '出错';
-          stopBtn.hidden = true;
-          list.innerHTML = `<div class="mopai-ai-item err">❌ ${esc(res.error || '未知错误')}${chunks.length > 1 ? '(已完成批次的结果保留)' : ''}</div>`;
-          return;
+
+        stopBtn.hidden = true;
+        summary.hidden = false;
+        PROOF_RUN.finished = true; // 完整跑完或手动停止:结果可复用(出错除外)
+        if (PROOF_RUN.cancelled) {
+          // 手动停止:只汇总已完成批次
+          PROOF_RUN.summaryHtml = `⏹ 已停止 · 已完成 ${doneBatches}/${chunks.length} 批 · 发现 <b>${PROOF_RUN.issues.length}</b> 处问题`;
+          setStatus('已停止');
+          prog.hidden = true;
+        } else {
+          PROOF_RUN.summaryHtml = `✅ 校对完成${chunks.length > 1 ? `(${chunks.length} 批)` : ''} · 发现 <b>${PROOF_RUN.issues.length}</b> 处问题`;
+          setStatus('完成');
+          if (PROOF_RUN.ui?.bar) PROOF_RUN.ui.bar.style.width = '100%';
+          setTimeout(() => { if (PROOF_RUN.ui?.prog) PROOF_RUN.ui.prog.hidden = true; }, 1500);
         }
-        const parsed = window.MoPaiAI.parseAiResponse(res.raw);
-        if (parsed.error) {
-          list.innerHTML = `<div class="mopai-ai-item err">❌ ${esc(parsed.error)}</div>`;
-          if (chunks.length === 1) { statusEl.textContent = '完成(解析失败)'; stopBtn.hidden = true; return; }
-        }
-        // 硬过滤:original 在正文中逐字找不到的(模型幻觉)直接丢弃,不展示
-        const fullText = (getEditorRoot() ? getEditorRoot().innerText || '' : '').replace(/\u00a0/g, ' ');
-        const kept = parsed.issues.filter((it) => it.original && fullText.includes(it.original));
-        issues = issues.concat(kept);
-        // 非最后一段:短间隔续跑,避免请求重叠;仅当服务端返回 429 时才按其指示倒计时
-        if (ci < chunks.length - 1) {
-          await new Promise((r) => setTimeout(r, 800));
+        summary.innerHTML = PROOF_RUN.summaryHtml;
+        renderIssues();
+      } finally {
+        // 仅当仍为最新代次时复位运行态(被取代的旧循环不碰新循环的状态)
+        if (PROOF_RUN.gen === gen) {
+          PROOF_RUN.running = false;
+          setRunBtn(false);
         }
       }
-
-      bar.style.width = '100%';
-      statusEl.textContent = '完成';
-      stopBtn.hidden = true;
-      setTimeout(() => { prog.hidden = true; }, 1500);
-      summary.hidden = false;
-      summary.innerHTML = `✅ 校对完成${chunks.length > 1 ? `(${chunks.length} 批)` : ''} · 发现 <b>${issues.length}</b> 处问题`;
-      renderIssues();
     };
 
     const applyOne = async (idx) => {
-      const it = issues[idx];
+      const it = PROOF_RUN.issues[idx];
       if (!it || it.applied) return;
       const cur = getEditorRoot();
       if (!cur) return toast('未找到编辑器', 'err');
@@ -1748,6 +1977,7 @@ await mopai.inject(article.html); // 直接注入公众号编辑器
         if (!injected.ok) return toast(`替换失败:${injected.reason}`, 'err');
         it.applied = true;
         renderIssues();
+        if (injected.warning) return toast(`已替换 ⚠️ ${injected.warning}`, 'warn');
         toast('已替换 ✅(可「排版 → 恢复快照」回滚)');
       } else if (r === 'cross-node') {
         toast('该片段横跨多个样式节点,请手动修改', 'err');
@@ -1764,13 +1994,14 @@ await mopai.inject(article.html); // 直接注入公众号编辑器
         const cur = getEditorRoot();
         if (!cur) return toast('未找到编辑器', 'err');
         saveSnapshot(cur.innerHTML).then(async () => {
-          const r = window.MoPaiAI.applyIssues(cur, issues);
+          const r = window.MoPaiAI.applyIssues(cur, PROOF_RUN.issues);
           const injected = await injectHtml(cur.innerHTML);
           if (!injected.ok) {
             renderIssues();
             return toast(`应用失败:${injected.reason}`, 'err');
           }
           renderIssues();
+          if (injected.warning) return toast(`已应用 ${r.applied} 处 ⚠️ ${injected.warning}`, 'warn');
           toast(`已应用 ${r.applied} 处${r.cross ? `,${r.cross} 处跨节点需手动` : ''}${r.missed ? `,${r.missed} 处未找到` : ''}`);
         });
       }
@@ -2133,6 +2364,7 @@ await mopai.inject(article.html); // 直接注入公众号编辑器
             toast(`写入失败:${injected.reason}`, 'err');
             return;
           }
+          if (injected.warning) return toast(`已写入编辑器 ⚠️ ${injected.warning}`, 'warn');
           toast(replace ? '已替换编辑器内容 ✅(原内容已存快照)' : '已追加到编辑器 ✅(原内容已存快照)');
         } finally {
           setBusy(false);
@@ -2365,6 +2597,7 @@ await mopai.inject(article.html); // 直接注入公众号编辑器
     });
     const work = p.querySelector('#mopai-check-work');
     const q = document.createElement('div');
+    q.className = 'mopai-subpane'; // 与主面板一致的分栏间距
     work.appendChild(q);
     if (checkMode === 'rules') renderRulesMode(q);
     else if (checkMode === 'detect') renderDetectMode(q);
@@ -2423,10 +2656,21 @@ await mopai.inject(article.html); // 直接注入公众号编辑器
     const p = pane(el);
     const src = getEditorRoot();
     if (!src) { p.innerHTML = editorMissingHint(); bindRetry(p); return; }
-    const st = window.MoPaiTypo.analyzeText(src);
-    const imgs = src.querySelectorAll('img').length;
-    const links = src.querySelectorAll('a[href]').length;
-    const paras = Math.max(src.querySelectorAll('p').length, 1);
+    // 统计前先剔除隐藏节点:微信编辑器含 display:none 的占位/模板数据,
+    // 直接 textContent/裸计数会把它们的文字与图片都算进去(字数、图片虚高)
+    const probe = document.createElement('div');
+    probe.style.cssText = 'position:fixed;left:-9999px;top:0;width:600px;';
+    probe.innerHTML = src.innerHTML;
+    document.body.appendChild(probe);
+    [...probe.querySelectorAll('*')].forEach((el) => {
+      if (getComputedStyle(el).display === 'none') el.remove();
+    });
+    const imgs = probe.querySelectorAll('img[src^="http"]').length; // data: 占位图不计
+    const links = probe.querySelectorAll('a[href]').length;
+    const text = (probe.innerText || probe.textContent || '').replace(/\u00a0/g, ' ');
+    document.body.removeChild(probe);
+    const st = window.MoPaiTypo.analyzeText(text);
+    const paras = Math.max(text.split(/\n+/).filter((s) => s.trim()).length, 1);
     const snap = await loadSnapshot();
     p.innerHTML = `
       <div class="mopai-stat-grid">
@@ -2448,7 +2692,9 @@ await mopai.inject(article.html); // 直接注入公众号编辑器
         const cur = getEditorRoot();
         if (cur) await saveSnapshot(cur.innerHTML);
         const r = await injectHtml(s.html);
-        toast(r.ok ? '已恢复快照 ✅' : `恢复失败:${r.reason}`, r.ok ? undefined : 'err');
+        if (!r.ok) return toast(r.changed ? `${r.reason}(恢复前内容已留档)` : `恢复失败:${r.reason}`, 'err');
+        if (r.warning) return toast(`已恢复快照 ⚠️ ${r.warning}`, 'warn');
+        toast('已恢复快照 ✅');
       }
     });
   }

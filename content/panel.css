@@ -7,8 +7,8 @@
   width: 52px;
   height: 52px;
   border-radius: 50%;
-  background: #17b44b;
-  box-shadow: 0 6px 20px rgba(23, 180, 75, 0.45);
+  background: #1fbb52; /* 与牛字图标 PNG 底色完全一致,消除中心色块 */
+  box-shadow: 0 6px 20px rgba(31, 187, 82, 0.45);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -24,8 +24,8 @@
   pointer-events: none;
 }
 .mopai-fab svg, .mopai-fab img { width: 100%; height: 100%; display: block; }
-.mopai-fab:hover { transform: scale(1.08); box-shadow: 0 8px 26px rgba(23, 180, 75, 0.55); }
-.mopai-fab.active { box-shadow: 0 0 0 3px rgba(23, 180, 75, 0.25), 0 6px 20px rgba(23, 180, 75, 0.45); }
+.mopai-fab:hover { transform: scale(1.08); box-shadow: 0 8px 26px rgba(31, 187, 82, 0.55); }
+.mopai-fab.active { box-shadow: 0 0 0 3px rgba(31, 187, 82, 0.25), 0 6px 20px rgba(31, 187, 82, 0.45); }
 
 .mopai-toolbar {
   position: static;
@@ -112,6 +112,7 @@
 }
 .mopai-toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
 .mopai-toast.err { background: rgba(178, 34, 52, 0.95); }
+.mopai-toast.warn { background: rgba(146, 94, 20, 0.95); }
 
 .mopai-panel {
   position: fixed;
@@ -212,17 +213,33 @@
   cursor: pointer;
   font-family: inherit;
   transition: all 0.15s;
+  box-sizing: border-box;
+  line-height: 1.5;
 }
 .mopai-btn:hover { border-color: #07c160; color: #07c160; }
 .mopai-btn.primary {
   background: linear-gradient(135deg, #1fd47f, #07c160);
-  border: none;
+  border: 1px solid transparent; /* 透明边框保持与普通按钮等高 */
   color: #fff;
   font-weight: 600;
 }
 .mopai-btn.primary:hover { opacity: 0.92; color: #fff; }
 .mopai-btn.ghost { border-color: transparent; background: #f3f4f6; color: #4b5563; }
 .mopai-btn.ghost:hover { background: #e8ebf0; }
+/* 校对等异步任务进行中:图标沿小椭圆轨迹游动(以原位为中心绕圈,图标保持直立) + 整体弱化 */
+.mopai-btn-ico { display: inline-block; }
+.mopai-btn.loading { opacity: 0.75; cursor: not-allowed; }
+.mopai-btn.loading .mopai-btn-ico { animation: mopai-orbit 1.2s ease-in-out infinite; }
+@keyframes mopai-orbit {
+  0%, 100% { transform: translate(0, 0); }
+  12.5% { transform: translate(0.5px, -0.7px); }
+  25% { transform: translate(1.6px, -1px); }
+  37.5% { transform: translate(2.6px, -0.7px); }
+  50% { transform: translate(3.2px, 0); }
+  62.5% { transform: translate(2.6px, 0.7px); }
+  75% { transform: translate(1.6px, 1px); }
+  87.5% { transform: translate(0.5px, 0.7px); }
+}
 
 .mopai-md {
   width: 100%;
@@ -248,6 +265,9 @@
   line-height: 1.7;
   word-break: break-all;
 }
+
+/* AI 写 / 检查页的模式内容容器:与主面板一致的分栏间距(此前无 gap 导致说明条、按钮、卡片贴脸) */
+.mopai-subpane { display: flex; flex-direction: column; gap: 10px; }
 
 .mopai-mini-preview {
   border: 1px dashed #d7dbe3;
@@ -280,9 +300,11 @@
 
 /* 主题网格 */
 .mopai-theme-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
-/* 自定义主题编辑器 */
-.mopai-custom-box { margin-top: 10px; border: 1px dashed #d5dbe5; border-radius: 10px; padding: 10px; background: #fafbfd; }
-.mopai-custom-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 10px; }
+/* 自定义主题编辑器:内部子块(色板网格/标题风格/提示)统一分栏间距 */
+.mopai-custom-box { margin-top: 10px; border: 1px dashed #d5dbe5; border-radius: 10px; padding: 10px; background: #fafbfd; display: flex; flex-direction: column; gap: 10px; }
+.mopai-custom-box[hidden] { display: none; } /* flex 布局会覆盖 hidden 属性的默认样式,需显式恢复 */
+.mopai-custom-box .mopai-hint { margin-top: 0; }
+.mopai-custom-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 10px; }
 .mopai-color-item { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 11px; color: #556; }
 .mopai-color-item input[type="color"] { width: 34px; height: 24px; border: 1px solid #d8dee9; border-radius: 6px; padding: 0; background: #fff; cursor: pointer; }
 .mopai-select { flex: 1; border: 1px solid #d8dee9; border-radius: 8px; padding: 6px 8px; font-size: 12px; color: #333; background: #fff; font-family: inherit; }
@@ -525,8 +547,8 @@
 .mopai-chip-option { padding: 4px 12px; }
 /* AI 生成加载动画:旋转圈 + 三条跳动圆点 */
 .mopai-ai-loading { display: flex; align-items: center; gap: 8px; padding: 16px 4px; color: #667; font-size: 13px; }
-/* 生成按钮行与结果卡片之间保持呼吸感 */
-#mopai-title-list, #mopai-summary-wrap { margin-top: 14px; }
+/* 生成按钮行与结果卡片之间保持呼吸感(容器 gap 10px + 此处补值 = 原视觉间距) */
+#mopai-title-list, #mopai-summary-wrap { margin-top: 4px; }
 .mopai-spinner {
   width: 14px; height: 14px; flex: none;
   border: 2px solid rgba(7, 193, 96, .25);
@@ -557,8 +579,8 @@
 }
 .mopai-article-form-row { display: flex; flex-direction: column; gap: 10px; }
 .mopai-article-form-row .mopai-field { display: flex; flex-direction: column; gap: 6px; }
-/* 生成初稿按钮行与上方「目标读者」标签组保持呼吸感 */
-.mopai-article-form-row + .mopai-row { margin-top: 16px; }
+/* 生成初稿按钮行与上方「目标读者」标签组保持呼吸感(容器 gap 10px + 此处补值 = 16px) */
+.mopai-article-form-row + .mopai-row { margin-top: 6px; }
 .mopai-article-head {
   display: flex;
   align-items: center;
